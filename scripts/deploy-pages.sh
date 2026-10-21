@@ -19,6 +19,9 @@ if [ -z "${GITHUB_TOKEN:-}" ]; then
   exit 1
 fi
 
+# 任何一步失败都立刻停下，避免推送失败还打印「完成」。
+die() { echo "失败：$1" >&2; exit 1; }
+
 api() {
   local method="$1" path="$2" data="${3:-}"
   if [ -n "$data" ]; then
@@ -50,18 +53,26 @@ else
 fi
 
 echo "==> 生成静态产物 docs/"
-npm run build:static >/dev/null || { echo "构建失败" >&2; exit 1; }
+npm run build:static >/dev/null || die "构建失败"
 
 echo "==> 推送 $BRANCH"
 git remote remove origin 2>/dev/null || true
 git remote add origin "https://${GITHUB_TOKEN}@github.com/${OWNER}/${REPO}.git"
 git add -A
 git diff --cached --quiet || git commit -q -m "部署账本静态产物"
-git push -q -f origin "$BRANCH"
+git push -q -f origin "$BRANCH" || die "推送被拒绝，检查令牌是否有 repo 权限"
 
 echo "==> 开启 GitHub Pages（/docs 目录）"
-# 已经开过会返回 409，忽略即可。
-api POST "/repos/$OWNER/$REPO/pages" "{\"source\":{\"branch\":\"$BRANCH\",\"path\":\"/docs\"}}" >/dev/null || true
+# 已经开过会返回 409，这种情况不算失败。
+pages_out=$(api POST "/repos/$OWNER/$REPO/pages" "{\"source\":{\"branch\":\"$BRANCH\",\"path\":\"/docs\"}}")
+if echo "$pages_out" | grep -q '"html_url"'; then
+  echo "    已开启"
+elif echo "$pages_out" | grep -qi "already"; then
+  echo "    之前已开启，跳过"
+else
+  echo "    警告：Pages 配置返回 $(echo "$pages_out" | head -c 200)" >&2
+  echo "    推送成功，可手动到 Settings → Pages 选 $BRANCH 分支的 /docs 目录。" >&2
+fi
 
 echo
 echo "完成！"
