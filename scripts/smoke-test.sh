@@ -7,7 +7,7 @@ BASE="http://127.0.0.1:${PORT}"
 DB_FILE="$(mktemp -d)/test.db"
 COOKIES="$(mktemp)"
 
-PORT="$PORT" MONEY_DB="$DB_FILE" MONEY_INSECURE_COOKIE=1 node server/index.js > /tmp/money-test.log 2>&1 &
+PORT="$PORT" MONEY_DB="$DB_FILE" node server/index.js > /tmp/money-test.log 2>&1 &
 SERVER_PID=$!
 trap 'kill $SERVER_PID 2>/dev/null; rm -f "$COOKIES"' EXIT
 
@@ -104,6 +104,15 @@ check "错误密码登录被拒" "$(curl -s -o /dev/null -w '%{http_code}' -X PO
   -H 'Content-Type: application/json' -d '{"username":"me","password":"nope"}')" "401"
 check "正确密码登录成功" "$(curl -fsS -c "$COOKIES" -X POST "$BASE/api/login" \
   -H 'Content-Type: application/json' -d '{"username":"me","password":"secret123"}' | jqv 'o.ok')" "true"
+
+# 手机经局域网用 http 访问时必须能收到可用的会话 Cookie，否则登录后会立刻掉线。
+check "http 下 Cookie 不带 Secure" \
+  "$(curl -fsS -D - -o /dev/null -X POST "$BASE/api/login" -H 'Content-Type: application/json' \
+     -d '{"username":"me","password":"secret123"}' | grep -i '^set-cookie' | grep -ci 'secure')" "0"
+check "https 下 Cookie 带 Secure" \
+  "$(curl -fsS -D - -o /dev/null -X POST "$BASE/api/login" -H 'Content-Type: application/json' \
+     -H 'X-Forwarded-Proto: https' -d '{"username":"me","password":"secret123"}' \
+     | grep -i '^set-cookie' | grep -ci 'secure')" "1"
 
 echo "== 9. 修改密码 =="
 check "当前密码错误被拒" "$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIES" -X POST "$BASE/api/password" \

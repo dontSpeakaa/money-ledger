@@ -381,7 +381,7 @@ const routes = [
     if (password.length < 6) throw bad('密码至少 6 位');
     const id = createUser(username, password);
     const { token, expires } = createSession(id);
-    setCookie(res, token, expires);
+    setCookie(req, res, token, expires);
     return { ok: true, username };
   }],
 
@@ -391,7 +391,7 @@ const routes = [
       throw new HttpError(401, '用户名或密码错误');
     }
     const { token, expires } = createSession(user.id);
-    setCookie(res, token, expires);
+    setCookie(req, res, token, expires);
     return { ok: true, username: user.username };
   }],
 
@@ -738,7 +738,7 @@ const routes = [
   }],
 ];
 
-function setCookie(res, token, expires) {
+function setCookie(req, res, token, expires) {
   const parts = [
     `${COOKIE}=${encodeURIComponent(token)}`,
     'Path=/',
@@ -746,8 +746,17 @@ function setCookie(res, token, expires) {
     'SameSite=Lax',
     `Expires=${new Date(expires).toUTCString()}`,
   ];
-  if (SECURE_COOKIE) parts.push('Secure');
+  // Secure cookies are rejected over plain http, which is how you reach the app
+  // from a phone on the LAN. Only mark Secure when the request really is https
+  // (direct TLS or a proxy that terminates it), unless forced by env.
+  const https = req.socket.encrypted === true || forwardedProto(req) === 'https';
+  if (SECURE_COOKIE && https) parts.push('Secure');
   res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+function forwardedProto(req) {
+  const raw = req.headers['x-forwarded-proto'] || req.headers['x-forwarded-protocol'] || '';
+  return String(raw).split(',')[0].trim().toLowerCase();
 }
 
 async function serveStatic(req, res, pathname) {

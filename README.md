@@ -23,11 +23,31 @@ npm start
 
 演示数据会清空已有账户和交易，只在空库上使用。想彻底清空重来，用 `npm run reset`。
 
-## 添加到 iPhone 主屏幕
+## 在 iPhone 上打开
 
-1. 手机和服务器连同一个 Wi-Fi，用 Safari 打开 `http://<服务器局域网IP>:12000`。
-2. 点底部分享按钮，选「添加到主屏幕」。
-3. 从主屏幕图标打开，就是全屏无地址栏的独立 App。
+### 方式一：局域网直连（推荐，数据不出家门）
+
+1. 确保手机和跑服务的电脑连同一个 Wi-Fi。
+2. 查电脑的局域网 IP：macOS/Linux 用 `hostname -I` 或 `ipconfig getifaddr en0`，Windows 用 `ipconfig`。
+3. 服务默认监听 `0.0.0.0:12000`，直接用 Safari 打开 `http://<局域网IP>:12000`。
+
+会话 Cookie 会按实际协议决定是否加 `Secure`：走 http 时自动不加，否则 Safari 会拒收 Cookie、登录后立刻掉线。
+
+### 方式二：公网地址
+
+如果服务跑在云主机或有域名，直接访问 `https://<你的域名>`。HTTPS 下 Cookie 自动带 `Secure`。
+建议放在 Nginx/Caddy 后面并配好 TLS，反代记得传 `X-Forwarded-Proto: https`。
+
+### 添加到主屏幕（变成本地 App）
+
+1. Safari 打开上面的地址，先登录一次。
+2. 点底部中间的「分享」按钮（方框加向上箭头）。
+3. 在列表里向下找到「添加到主屏幕」，改个名字，点「添加」。
+4. 从主屏幕图标打开，就是全屏无地址栏的独立 App。
+
+注意：必须是 **Safari**。Chrome、微信内置浏览器都加不了主屏幕，也不会全屏运行。
+另外 PWA 的「独立运行」和 Service Worker 离线缓存只在 HTTPS（或 `localhost`）下生效。
+走局域网 http 时能正常使用和加到主屏幕，但离线缓存不启用。
 
 ## 功能
 
@@ -64,8 +84,9 @@ http://<服务器IP>:12000/api/quick?token=<令牌>&amount=38.5&category=餐饮&
 | 环境变量 | 说明 | 默认 |
 | --- | --- | --- |
 | `PORT` | 监听端口 | `12000` |
+| `HOST` | 监听地址，默认允许局域网访问 | `0.0.0.0` |
 | `MONEY_DB` | SQLite 文件路径 | `data/money.db` |
-| `MONEY_INSECURE_COOKIE` | 设为 `1` 时允许 HTTP 下的非 Secure Cookie，仅用于本地测试 | 关闭 |
+| `MONEY_INSECURE_COOKIE` | 设为 `1` 时强制不加 Secure Cookie（正常情况无需设置，程序会自动判断 http/https） | 自动判断 |
 
 ## 开发
 

@@ -27,5 +27,7 @@ npm run make-icons # 重新生成 PWA 图标
 ## 注意事项
 
 - 删除数据库时必须同时删掉 `-wal` 和 `-shm`，否则新库会被旧 WAL 干扰（见 `scripts/reset.js`）。
-- 会话 Cookie 默认带 `Secure`；本地用 http 调试需要 `MONEY_INSECURE_COOKIE=1`。
+- 会话 Cookie 的 `Secure` 由 `setCookie(req, ...)` 按实际协议判断：`req.socket.encrypted`
+  或 `X-Forwarded-Proto: https` 才加。局域网 http 访问必须不加，否则 Safari 拒收 Cookie、
+  登录后立刻掉线。`MONEY_INSECURE_COOKIE=1` 可强制不加（仅调试用）。
 - 测试用例数变化时同步更新 README 中的数字。
