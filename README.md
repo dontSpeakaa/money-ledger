@@ -40,15 +40,17 @@ npm start
 
 ### 方式三：纯手机本地模式（GitHub Pages，不需要电脑常开）
 
-不想一直开着电脑，就把前端传到 GitHub Pages，数据直接存在 iPhone 的浏览器里：
+不想一直开着电脑，就把前端传到 GitHub Pages，数据直接存在 iPhone 的浏览器里。
+一条命令搞定（需要一个有 `repo` 权限的令牌）：
 
 ```bash
-npm run build:static   # 生成 docs/ 目录
+GITHUB_TOKEN=ghp_xxx ./scripts/deploy-pages.sh money-ledger
 ```
 
-把 `docs/` 里的文件推到 GitHub 仓库，在仓库 Settings → Pages 里选该分支的 `/docs` 目录发布，
-得到类似 `https://<用户名>.github.io/<仓库名>/` 的地址，用 Safari 打开后按上面的步骤
-「添加到主屏幕」即可。
+脚本会创建仓库、推送 `main`、并把 Pages 指向 `/docs` 目录，完成后得到
+`https://<用户名>.github.io/<仓库名>/`，用 Safari 打开后按上面的步骤「添加到主屏幕」即可。
+想手动做也行：`npm run build:static` 生成 `docs/`，推到仓库后在 Settings → Pages 里
+选该分支的 `/docs` 目录发布。
 
 这个模式的特点：
 
