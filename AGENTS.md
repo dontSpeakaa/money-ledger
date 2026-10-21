@@ -50,3 +50,22 @@ npm run make-icons # 重新生成 PWA 图标
   或 `X-Forwarded-Proto: https` 才加。局域网 http 访问必须不加，否则 Safari 拒收 Cookie、
   登录后立刻掉线。`MONEY_INSECURE_COOKIE=1` 可强制不加（仅调试用）。
 - 测试用例数变化时同步更新 README 中的数字。
+
+## 部署到 GitHub Pages
+
+```bash
+GITHUB_TOKEN=ghp_xxx ./scripts/deploy-pages.sh money-ledger
+```
+
+脚本会：生成 `docs/` → 推送 `main` → 开启 Pages（源 = `main` 的 `/docs`）。
+推送失败会立即中止（`die`），不会误报成功。
+
+令牌要求：classic PAT，勾 `repo` 即可（`x-oauth-scopes: repo`）。注意：
+
+- 环境里托管的 `GITHUB_TOKEN`（`ghu_` 前缀）**只有只读权限**：`git ls-remote` 能过，
+  但 `git push` 和 `PUT /contents/...` 都返回 403 / `Resource not accessible by integration`，
+  且 `/user/installations` 为空、限流 5000。要推送必须用户自备 classic PAT。
+- 仓库已存在时脚本会跳过创建。`POST /repos/{owner}/{repo}/pages` 重复调用会返回 409，
+  脚本按「已开启」处理。
+- 推送完成后记得把 remote 里的令牌去掉：
+  `git remote set-url origin https://github.com/<owner>/<repo>.git`。
