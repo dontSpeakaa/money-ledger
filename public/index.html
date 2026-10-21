@@ -41,7 +41,7 @@
       <button type="submit" class="btn primary block" id="auth-submit">登录</button>
       <p id="auth-error" class="error hidden"></p>
     </form>
-    <p class="muted small">数据只保存在这台服务器上，只有你能看到。</p>
+    <p class="muted small" id="auth-note">数据只保存在这台服务器上，只有你能看到。</p>
   </div>
 </section>
 
@@ -127,8 +127,8 @@
         <div id="import-report" class="import-report hidden"></div>
       </div>
 
-      <div class="section-head"><h2>自动化（iPhone 快捷指令）</h2></div>
-      <div class="card stack-sm">
+      <div class="section-head" id="automation-section"><h2>自动化（iPhone 快捷指令）</h2></div>
+      <div class="card stack-sm" id="automation-card">
         <p class="muted small">生成一个长期令牌后，任何消费都能用一条链接自动记账，例如在「快捷指令」里用「获取 URL 内容」调用。</p>
         <div id="token-box" class="token-box muted small">尚未生成令牌</div>
         <button class="btn ghost block" id="btn-token">生成 / 重置令牌</button>
@@ -136,14 +136,25 @@
         <button class="btn danger-ghost block hidden" id="btn-token-revoke">撤销令牌</button>
       </div>
 
+      <div class="section-head hidden" id="backup-section"><h2>备份与恢复</h2></div>
+      <div class="card stack-sm hidden" id="backup-card">
+        <p class="muted small">
+          数据只存在这台手机上。手机丢失、系统更新或清理浏览器数据都可能让账本消失，<strong>请定期导出备份</strong>并保存到「文件」App 或 iCloud。
+        </p>
+        <button class="btn primary block" id="btn-backup">导出完整备份（推荐）</button>
+        <button class="btn ghost block" id="btn-restore">从备份恢复</button>
+        <input id="restore-file" type="file" accept=".json,application/json" hidden>
+      </div>
+
       <div class="section-head"><h2>数据</h2></div>
       <div class="card stack-sm">
-        <a class="btn ghost block" href="/api/export.csv" download>导出 CSV</a>
-        <a class="btn ghost block" href="/api/export.json" download>导出 JSON 备份</a>
+        <button class="btn ghost block" id="btn-export-csv">导出 CSV</button>
+        <button class="btn ghost block" id="btn-export-json">导出 JSON 备份</button>
         <button class="btn ghost block" id="btn-change-password">修改密码</button>
+        <button class="btn danger-ghost block hidden" id="btn-wipe">清空全部数据</button>
         <button class="btn danger-ghost block" id="btn-logout">退出登录</button>
       </div>
-      <p class="muted small center" style="padding:16px 0 40px">我的账本 · 数据存于本机 SQLite</p>
+      <p class="muted small center" id="storage-note" style="padding:16px 0 40px">我的账本 · 数据存于本机 SQLite</p>
     </section>
   </main>
 

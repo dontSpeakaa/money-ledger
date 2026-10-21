@@ -5,11 +5,26 @@
 个人理财账本（PWA）。零外部依赖：Node 原生 `http` + `node:sqlite` + 原生 JS 前端。
 单用户、自托管，数据存在本机 SQLite。
 
+## 两种运行模式（同一份前端）
+
+1. **服务器模式**（`npm start`）：数据存 SQLite，多设备可访问，带登录密码。
+2. **本地模式**（`npm run build:static` 产物，或 `?local=1`）：没有服务器，
+   业务逻辑跑在浏览器里，数据存 IndexedDB。适合传到 GitHub Pages 后加到 iPhone 主屏。
+
+两种模式的接口返回必须**完全一致**，靠 `scripts/contract-test.mjs` 强制校验：
+它同时跑服务端（真 SQLite）和本地模式（内存 driver），逐字段比较返回结构。
+**改任何一边的返回字段，都要同步另一边**，否则合同测试会红。
+
+约定：本地模式只暴露服务端 `SELECT` 出来的字段。例如 `listAccounts()` 只 SELECT
+`id/name/type/currency/initial_balance/archived/sort_order` 加派生的 `balance/tx_count`，
+本地实现就不能把 `created_at` 一起返回（历史 bug：本地多返回 `created_at`/`updated_at`）。
+
 ## 常用命令
 
 ```bash
 npm start          # 启动服务，默认 PORT=12000，监听 0.0.0.0
-npm test           # 冒烟测试（scripts/smoke-test.sh），会启动临时实例
+npm test           # 全量测试：冒烟 + 本地模式 + 合同一致性
+npm run build:static  # 生成 docs/（GitHub Pages 用，相对路径 + 本地模式）
 npm run seed-demo  # 写入演示数据 + 演示账号 me / demo123456（会清空账户与交易）
 npm run reset      # 清空数据库（含 -wal / -shm）
 npm run make-icons # 重新生成 PWA 图标
@@ -22,7 +37,11 @@ npm run make-icons # 重新生成 PWA 图标
 - `server/index.js` — 路由表 + 鉴权。`requireApiAuth(req, url, body)` 依次尝试
   `Authorization: Bearer`、`X-Api-Token`、`?token=`、JSON body 的 `token`。
 - `public/` — 前端。`app.js` 里 `refreshAll()` 拉账户/分类/汇总，`reloadMonth()` 拉明细。
+- `public/local-api.js` — 本地模式的后端（`createLocalApi(driver)`），driver 可换：
+  浏览器用 `idbDriver`（IndexedDB），node 测试用 `memoryDriver`。
+- `scripts/contract-test.mjs` — 服务端 vs 本地模式的返回结构对比。
 - `data/money.db` — 运行时数据，已 gitignore。
+- `docs/` — `build:static` 产物，GitHub Pages 直接发布这个目录。
 
 ## 注意事项
 

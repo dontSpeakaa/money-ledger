@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f4f6fb" media="(prefers-color-scheme: light)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="我的账本">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+<title>我的账本</title>
+</head>
+<body>
+
+<!-- ------------------------------------------------------- 登录 / 初始化 -->
+<section id="auth-screen" class="auth-screen hidden">
+  <div class="auth-card">
+    <div class="auth-logo">💰</div>
+    <h1 id="auth-title">我的账本</h1>
+    <p id="auth-hint" class="muted">输入密码登录</p>
+    <form id="auth-form" autocomplete="on">
+      <label id="username-label" class="field hidden">
+        <span>用户名</span>
+        <input id="auth-username" name="username" type="text" value="me" autocomplete="username">
+      </label>
+      <label class="field">
+        <span>密码</span>
+        <input id="auth-password" name="password" type="password" autocomplete="current-password"
+               placeholder="至少 6 位" required>
+      </label>
+      <label id="confirm-label" class="field hidden">
+        <span>确认密码</span>
+        <input id="auth-confirm" type="password" autocomplete="new-password">
+      </label>
+      <button type="submit" class="btn primary block" id="auth-submit">登录</button>
+      <p id="auth-error" class="error hidden"></p>
+    </form>
+    <p class="muted small" id="auth-note">数据只保存在这台服务器上，只有你能看到。</p>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------- 主应用 -->
+<div id="app" class="app hidden">
+
+  <header class="topbar">
+    <button class="icon-btn" id="btn-prev-month" aria-label="上个月">‹</button>
+    <button class="month-label" id="month-label">2026年10月</button>
+    <button class="icon-btn" id="btn-next-month" aria-label="下个月">›</button>
+    <div class="topbar-spacer"></div>
+    <button class="icon-btn" id="btn-refresh" aria-label="刷新">↻</button>
+  </header>
+
+  <main id="main">
+
+    <!-- 总览 -->
+    <section class="view" id="view-overview">
+      <div class="hero card">
+        <p class="hero-label">净资产</p>
+        <p class="hero-value" id="net-worth">¥0.00</p>
+        <div class="hero-split">
+          <div><span class="muted small">本月收入</span><strong class="pos" id="month-income">¥0.00</strong></div>
+          <div><span class="muted small">本月支出</span><strong class="neg" id="month-expense">¥0.00</strong></div>
+          <div><span class="muted small">本月结余</span><strong id="month-net">¥0.00</strong></div>
+        </div>
+      </div>
+
+      <div class="section-head"><h2>账户</h2><button class="link" data-goto="settings">管理</button></div>
+      <div id="account-list" class="stack"></div>
+
+      <div class="section-head"><h2>本月支出构成</h2></div>
+      <div class="card" id="category-chart"></div>
+
+      <div class="section-head"><h2>最近记录</h2><button class="link" data-goto="list">全部</button></div>
+      <div id="recent-list" class="stack"></div>
+    </section>
+
+    <!-- 明细 -->
+    <section class="view hidden" id="view-list">
+      <div class="filters card">
+        <input id="filter-q" type="search" placeholder="搜索备注 / 分类" enterkeyhint="search">
+        <div class="chip-row" id="filter-accounts"></div>
+        <div class="chip-row" id="filter-categories"></div>
+      </div>
+      <div class="list-meta" id="list-meta"></div>
+      <div id="tx-list" class="stack"></div>
+      <button class="btn ghost block hidden" id="btn-more">加载更多</button>
+    </section>
+
+    <!-- 统计 -->
+    <section class="view hidden" id="view-stats">
+      <div class="section-head"><h2>近 6 个月收支</h2></div>
+      <div class="card" id="trend-chart"></div>
+      <div class="section-head"><h2>预算</h2><button class="link" id="btn-edit-budget">设置</button></div>
+      <div id="budget-list" class="stack"></div>
+      <div class="section-head"><h2>分类排行</h2></div>
+      <div id="rank-list" class="stack"></div>
+    </section>
+
+    <!-- 设置 -->
+    <section class="view hidden" id="view-settings">
+      <div class="section-head"><h2>账户</h2><button class="link" id="btn-add-account">＋ 新增</button></div>
+      <div id="settings-accounts" class="stack"></div>
+
+      <div class="section-head"><h2>分类</h2><button class="link" id="btn-add-category">＋ 新增</button></div>
+      <div class="card">
+        <div class="chip-row" id="settings-categories"></div>
+      </div>
+
+      <div class="section-head"><h2>导入</h2></div>
+      <div class="card stack-sm">
+        <p class="muted small">支持支付宝 / 微信 / 银行导出的 CSV（自动识别「日期 / 金额 / 收入 / 支出 / 备注」等列名），也支持粘贴 JSON。</p>
+        <label class="field">
+          <span>导入到账户</span>
+          <select id="import-account"></select>
+        </label>
+        <label class="file-field" for="import-file">
+          <span id="import-file-name">选择 CSV / JSON 文件</span>
+          <input id="import-file" type="file" accept=".csv,.json,text/csv,application/json">
+        </label>
+        <button class="btn ghost block" id="btn-import-preview">预览（不写入）</button>
+        <div id="import-report" class="import-report hidden"></div>
+      </div>
+
+      <div class="section-head" id="automation-section"><h2>自动化（iPhone 快捷指令）</h2></div>
+      <div class="card stack-sm" id="automation-card">
+        <p class="muted small">生成一个长期令牌后，任何消费都能用一条链接自动记账，例如在「快捷指令」里用「获取 URL 内容」调用。</p>
+        <div id="token-box" class="token-box muted small">尚未生成令牌</div>
+        <button class="btn ghost block" id="btn-token">生成 / 重置令牌</button>
+        <button class="btn ghost block" id="btn-copy-cmd">复制快捷指令示例</button>
+        <button class="btn danger-ghost block hidden" id="btn-token-revoke">撤销令牌</button>
+      </div>
+
+      <div class="section-head hidden" id="backup-section"><h2>备份与恢复</h2></div>
+      <div class="card stack-sm hidden" id="backup-card">
+        <p class="muted small">
+          数据只存在这台手机上。手机丢失、系统更新或清理浏览器数据都可能让账本消失，<strong>请定期导出备份</strong>并保存到「文件」App 或 iCloud。
+        </p>
+        <button class="btn primary block" id="btn-backup">导出完整备份（推荐）</button>
+        <button class="btn ghost block" id="btn-restore">从备份恢复</button>
+        <input id="restore-file" type="file" accept=".json,application/json" hidden>
+      </div>
+
+      <div class="section-head"><h2>数据</h2></div>
+      <div class="card stack-sm">
+        <button class="btn ghost block" id="btn-export-csv">导出 CSV</button>
+        <button class="btn ghost block" id="btn-export-json">导出 JSON 备份</button>
+        <button class="btn ghost block" id="btn-change-password">修改密码</button>
+        <button class="btn danger-ghost block hidden" id="btn-wipe">清空全部数据</button>
+        <button class="btn danger-ghost block" id="btn-logout">退出登录</button>
+      </div>
+      <p class="muted small center" id="storage-note" style="padding:16px 0 40px">我的账本 · 数据存于本机 SQLite</p>
+    </section>
+  </main>
+
+  <nav class="tabbar">
+    <button class="tab active" data-view="overview"><span>🏠</span>总览</button>
+    <button class="tab" data-view="list"><span>📋</span>明细</button>
+    <button class="tab add" id="tab-add"><span>＋</span></button>
+    <button class="tab" data-view="stats"><span>📊</span>统计</button>
+    <button class="tab" data-view="settings"><span>⚙️</span>设置</button>
+  </nav>
+</div>
+
+<!-- ------------------------------------------------------------ 记账面板 -->
+<div id="sheet" class="sheet-backdrop hidden">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <div class="segmented" id="tx-kind">
+      <button class="active" data-kind="expense">支出</button>
+      <button data-kind="income">收入</button>
+      <button data-kind="transfer">转账</button>
+    </div>
+
+    <div class="amount-input">
+      <span>¥</span><input id="tx-amount" type="text" inputmode="decimal" placeholder="0.00">
+    </div>
+
+    <div id="tx-single" class="stack-sm">
+      <label class="field"><span>分类</span><div class="chip-row" id="tx-categories"></div></label>
+      <label class="field"><span>账户</span><select id="tx-account"></select></label>
+    </div>
+
+    <div id="tx-transfer" class="stack-sm hidden">
+      <label class="field"><span>从</span><select id="tx-from"></select></label>
+      <label class="field"><span>到</span><select id="tx-to"></select></label>
+    </div>
+
+    <div class="grid-2">
+      <label class="field"><span>日期</span><input id="tx-date" type="date"></label>
+      <label class="field"><span>备注</span><input id="tx-note" type="text" placeholder="可选"></label>
+    </div>
+
+    <div class="quick-row" id="tx-quick"></div>
+
+    <div class="sheet-actions">
+      <button class="btn ghost" id="btn-sheet-cancel">取消</button>
+      <button class="btn primary" id="btn-sheet-save">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ------------------------------------------------------------ 通用弹窗 -->
+<div id="modal" class="modal-backdrop hidden">
+  <div class="modal">
+    <h3 id="modal-title"></h3>
+    <div id="modal-body" class="stack-sm"></div>
+    <div class="sheet-actions">
+      <button class="btn ghost" id="btn-modal-cancel">取消</button>
+      <button class="btn primary" id="btn-modal-ok">确定</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script>
+  // 脚本出错时不要静默白屏，直接告诉用户。
+  window.addEventListener('error', (e) => {
+    document.title = `ERR: ${e.message}`;
+    const t = document.getElementById('toast');
+    if (t) {
+      t.textContent = `脚本错误：${e.message}`;
+      t.classList.remove('hidden');
+    }
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    document.title = `REJ: ${e.reason && e.reason.message ? e.reason.message : e.reason}`;
+  });
+</script>
+<script>window.MONEY_MODE = 'local';</script>
+  <script src="app.js" type="module"></script>
+</body>
+</html>

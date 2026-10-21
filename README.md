@@ -38,6 +38,28 @@ npm start
 如果服务跑在云主机或有域名，直接访问 `https://<你的域名>`。HTTPS 下 Cookie 自动带 `Secure`。
 建议放在 Nginx/Caddy 后面并配好 TLS，反代记得传 `X-Forwarded-Proto: https`。
 
+### 方式三：纯手机本地模式（GitHub Pages，不需要电脑常开）
+
+不想一直开着电脑，就把前端传到 GitHub Pages，数据直接存在 iPhone 的浏览器里：
+
+```bash
+npm run build:static   # 生成 docs/ 目录
+```
+
+把 `docs/` 里的文件推到 GitHub 仓库，在仓库 Settings → Pages 里选该分支的 `/docs` 目录发布，
+得到类似 `https://<用户名>.github.io/<仓库名>/` 的地址，用 Safari 打开后按上面的步骤
+「添加到主屏幕」即可。
+
+这个模式的特点：
+
+- **没有服务器**，业务逻辑跑在浏览器里，数据存 IndexedDB，只有这台手机能看到。
+- 完全离线可用（Service Worker 缓存了整个 App），装好后断网也能记账。
+- 因为没有服务器，也就没有跨设备同步。换手机或清理浏览器数据前，
+  务必用「设置 → 导出完整备份」，再从备份恢复。
+- 想清空重来，用「设置 → 清空全部数据」。
+
+也可以给服务器模式临时加 `?local=1` 走本地模式，方便对比两种模式的表现。
+
 ### 添加到主屏幕（变成本地 App）
 
 1. Safari 打开上面的地址，先登录一次。

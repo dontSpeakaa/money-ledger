@@ -5,6 +5,7 @@ const SHELL = [
   '/index.html',
   '/styles.css',
   '/app.js',
+  '/local-api.js',
   '/manifest.webmanifest',
   '/icons/icon.svg',
   '/icons/icon-180.png',

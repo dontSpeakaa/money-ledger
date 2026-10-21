@@ -1,5 +1,12 @@
 /* 我的账本 - 前端逻辑（原生 JS，无依赖） */
 
+// MONEY_MODE 由构建脚本注入：'local' 表示纯手机模式（数据存本机 IndexedDB），
+// 'server' 或未定义表示连后端。也支持 ?local=1 临时切换，方便在服务器上试本地模式。
+const LOCAL_MODE =
+  window.MONEY_MODE === 'local' ||
+  new URLSearchParams(location.search).get('local') === '1';
+let localApi = null;
+
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
@@ -16,6 +23,7 @@ const state = {
   kind: 'expense',
   pickedCategory: null,
   token: null,
+  local: LOCAL_MODE,
 };
 
 // ------------------------------------------------------------------- helpers
@@ -76,6 +84,25 @@ function toast(msg, ms = 2200) {
 }
 
 async function api(path, { method = 'GET', body, raw } = {}) {
+  // 纯手机模式：不经过网络，直接调本地实现。
+  if (LOCAL_MODE) {
+    if (!localApi) {
+      const { createLocalApi, idbDriver } = await import('./local-api.js');
+      localApi = createLocalApi(idbDriver());
+    }
+    try {
+      const data = await localApi.handle(path, { method, body });
+      if (data && data.__csv) {
+        const blob = new Blob([`\uFEFF${data.__csv}`], { type: 'text/csv;charset=utf-8' });
+        return raw ? new Response(blob) : data;
+      }
+      return data;
+    } catch (err) {
+      if (err.status === 401 && state.view) showAuth();
+      throw new Error(err.message || '本地操作失败');
+    }
+  }
+
   const res = await fetch(path, {
     method,
     credentials: 'same-origin',
@@ -95,6 +122,35 @@ async function api(path, { method = 'GET', body, raw } = {}) {
     throw new Error(data.error || `请求失败 (${res.status})`);
   }
   return data;
+}
+
+/** 下载一份数据（本地模式造 blob，服务端模式走接口）。 */
+async function downloadFile(path, filename, { body, method = 'GET' } = {}) {
+  let blob;
+  if (LOCAL_MODE) {
+    const data = await api(path, { method, body });
+    const text = data.__csv ?? JSON.stringify(data, null, 2);
+    blob = new Blob([data.__csv ? `\uFEFF${text}` : text], {
+      type: data.__csv ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8',
+    });
+  } else {
+    const res = await fetch(path, {
+      method,
+      credentials: 'same-origin',
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) throw new Error(`导出失败 (${res.status})`);
+    blob = await res.blob();
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 const categoryIcon = (name) => state.categories.find((c) => c.name === name)?.icon || '🏷️';
@@ -117,6 +173,12 @@ function showAuth(setupRequired = false) {
 }
 
 async function boot() {
+  // 本地模式的界面文案/入口与服务器模式不同，登录前就先调整好，
+  // 否则设置页会先闪一下「存在服务器上」的字样。
+  if (LOCAL_MODE) {
+    applyLocalUi();
+    requestPersistentStorage();
+  }
   const me = await api('/api/me');
   if (me.setup_required) return showAuth(true);
   if (!me.authenticated) return showAuth(false);
@@ -131,6 +193,31 @@ async function enterApp() {
   navigate('overview');
   render();
   await loadToken();
+}
+
+/**
+ * 纯手机模式下数据只有手机这一份，尽量争取「持久存储」，
+ * 降低系统在空间紧张时清理掉账本的可能。
+ */
+async function requestPersistentStorage() {
+  try {
+    if (!navigator.storage?.persist) return;
+    if (await navigator.storage.persisted()) return;
+    await navigator.storage.persist();
+  } catch {
+    /* 拿不到持久化也不影响使用 */
+  }
+}
+
+/** 纯手机模式下调整界面：隐藏用不上的自动化，换成备份/恢复。 */
+function applyLocalUi() {
+  $('#automation-section')?.classList.add('hidden');
+  $('#automation-card')?.classList.add('hidden');
+  $('#backup-section')?.classList.remove('hidden');
+  $('#backup-card')?.classList.remove('hidden');
+  $('#btn-wipe')?.classList.remove('hidden');
+  $('#storage-note').textContent = '我的账本 · 数据存在这台手机的浏览器里';
+  $('#auth-note').textContent = '数据只保存在这台手机上，只有你能看到。';
 }
 
 $('#auth-form').addEventListener('submit', async (e) => {
@@ -869,6 +956,7 @@ $('#btn-import-preview').onclick = async () => {
 // ------------------------------------------------------------------ 自动化令牌
 
 async function loadToken() {
+  if (LOCAL_MODE) return; // 纯手机模式没有公网地址，快捷指令不适用
   const me = await api('/api/me');
   const box = $('#token-box');
   if (!me.has_api_token) {
@@ -930,7 +1018,93 @@ $('#btn-logout').onclick = async () => {
   showAuth(false);
 };
 
+// ---------------------------------------------------------- 备份 / 恢复（纯手机模式）
+
+$('#btn-export-csv')?.addEventListener('click', async () => {
+  try {
+    await downloadFile('/api/export.csv', `账本-${todayStr()}.csv`);
+    toast('已导出 CSV');
+  } catch (e) {
+    toast(e.message);
+  }
+});
+
+$('#btn-export-json')?.addEventListener('click', async () => {
+  try {
+    await downloadFile('/api/export.json', `账本-${todayStr()}.json`);
+    toast('已导出 JSON');
+  } catch (e) {
+    toast(e.message);
+  }
+});
+
+$('#btn-backup')?.addEventListener('click', async () => {
+  try {
+    await downloadFile('/api/backup', `账本备份-${todayStr()}.json`);
+    localStorage.setItem('money_last_backup', new Date().toISOString());
+    toast('备份已导出，请存到「文件」App 或 iCloud');
+  } catch (e) {
+    toast(e.message);
+  }
+});
+
+$('#btn-restore')?.addEventListener('click', () => $('#restore-file')?.click());
+
+$('#restore-file')?.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  try {
+    const text = await file.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error('不是有效的 JSON 文件');
+    }
+    if (!Array.isArray(data.accounts) || !Array.isArray(data.transactions)) {
+      throw new Error('这不是本应用导出的备份文件');
+    }
+    if (!confirm(`将用备份覆盖当前数据（${data.accounts.length} 个账户、${data.transactions.length} 笔记录）。\n当前数据会被替换，确定继续？`)) {
+      return;
+    }
+    const r = await api('/api/restore', { method: 'POST', body: { data } });
+    await refreshAll();
+    await loadTransactions(true);
+    render();
+    toast(`已恢复 ${r.accounts} 个账户、${r.transactions} 笔记录`);
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+$('#btn-wipe')?.addEventListener('click', async () => {
+  if (!confirm('清空所有账户和流水？此操作无法撤销，建议先导出备份。')) return;
+  if (!confirm('再确认一次：真的要清空全部账目吗？')) return;
+  try {
+    await api('/api/wipe', { method: 'POST' });
+    await refreshAll();
+    await loadTransactions(true);
+    render();
+    toast('已清空');
+  } catch (e) {
+    toast(e.message);
+  }
+});
+
 // ---------------------------------------------------------------- 启动 & PWA
+
+// 出问题时把错误显示出来，避免只看到界面没反应。
+window.addEventListener('error', (e) => {
+  const msg = e.error?.message || e.message || '未知错误';
+  console.error(e.error || e);
+  if (typeof toast === 'function') toast(`出错了：${msg}`, 5000);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  const msg = e.reason?.message || String(e.reason);
+  console.error(e.reason);
+  if (typeof toast === 'function') toast(`出错了：${msg}`, 5000);
+});
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {

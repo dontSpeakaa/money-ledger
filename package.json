@@ -11,7 +11,8 @@
     "start": "node server/index.js",
     "seed-demo": "node scripts/seed.js",
     "reset": "node scripts/reset.js",
-    "test": "bash scripts/smoke-test.sh",
-    "make-icons": "node scripts/make-icons.js"
+    "test": "bash scripts/smoke-test.sh && node scripts/local-test.mjs && node scripts/contract-test.mjs",
+    "make-icons": "node scripts/make-icons.js",
+    "build:static": "node scripts/build-static.js"
   }
 }
