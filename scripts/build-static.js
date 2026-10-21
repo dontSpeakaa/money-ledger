@@ -48,8 +48,9 @@ app = app.replace("register('/sw.js'", "register('sw.js'");
 writeFileSync(join(OUT, 'app.js'), app);
 
 // --- service worker：本地模式不发任何请求，直接用一份相对路径的版本 ---
+// 策略与服务端版一致：缓存优先 + 后台更新，避免每次启动都等网络。
 const sw = `/* 纯手机模式：静态资源离线可用，全部数据在 IndexedDB 里 */
-const CACHE = 'money-local-v1';
+const CACHE = 'money-local-v2';
 const SHELL = [
   './',
   'index.html',
@@ -65,7 +66,10 @@ const SHELL = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()),
+    caches.open(CACHE).then((cache) =>
+      // 逐个缓存：任何一个 404 都不该让整次安装失败。
+      Promise.all(SHELL.map((u) => cache.add(u).catch(() => {}))),
+    ).then(() => self.skipWaiting()),
   );
 });
 
@@ -85,21 +89,27 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== location.origin) return;
 
   event.respondWith(
-    fetch(request)
-      .then((res) => {
-        if (res.ok) {
-          const copy = res.clone();
-          caches.open(CACHE).then((cache) => cache.put(request, copy));
-        }
-        return res;
-      })
-      .catch(() =>
-        caches.match(request).then((cached) => {
-          if (cached) return cached;
-          if (request.mode === 'navigate') return caches.match('index.html');
-          return Response.error();
-        }),
-      ),
+    caches.open(CACHE).then(async (cache) => {
+      const cached = await cache.match(request, { ignoreSearch: true });
+
+      // 后台更新，不阻塞本次响应。
+      const network = fetch(request)
+        .then((res) => {
+          if (res && res.ok) cache.put(request, res.clone());
+          return res;
+        })
+        .catch(() => null);
+
+      if (cached) return cached;
+
+      const res = await network;
+      if (res) return res;
+      if (request.mode === 'navigate') {
+        const shell = await cache.match('index.html', { ignoreSearch: true });
+        if (shell) return shell;
+      }
+      return Response.error();
+    }),
   );
 });
 `;

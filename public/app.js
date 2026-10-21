@@ -10,6 +10,12 @@ let localApi = null;
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
+// 本地模式的后端要等用到才 import，但那次 import 是一次网络往返。
+// 这里在脚本一加载就把它启动起来，和后面的启动流程并行，省掉一段串行等待。
+const localApiReady = LOCAL_MODE
+  ? import('./local-api.js').then((m) => m.createLocalApi(m.idbDriver()))
+  : null;
+
 const state = {
   month: new Date().toISOString().slice(0, 7),
   view: 'overview',
@@ -86,10 +92,7 @@ function toast(msg, ms = 2200) {
 async function api(path, { method = 'GET', body, raw } = {}) {
   // 纯手机模式：不经过网络，直接调本地实现。
   if (LOCAL_MODE) {
-    if (!localApi) {
-      const { createLocalApi, idbDriver } = await import('./local-api.js');
-      localApi = createLocalApi(idbDriver());
-    }
+    if (!localApi) localApi = await localApiReady;
     try {
       const data = await localApi.handle(path, { method, body });
       if (data && data.__csv) {
@@ -179,20 +182,28 @@ async function boot() {
     applyLocalUi();
     requestPersistentStorage();
   }
+  // 先决定去登录页还是主界面，这一步只依赖 /api/me；令牌等主界面的事
+  // 放到后台做，不阻塞首屏。
   const me = await api('/api/me');
+  hideSplash();
   if (me.setup_required) return showAuth(true);
   if (!me.authenticated) return showAuth(false);
   await enterApp();
 }
 
+function hideSplash() {
+  $('#splash')?.classList.add('hidden');
+}
+
 async function enterApp() {
   $('#auth-screen').classList.add('hidden');
   $('#app').classList.remove('hidden');
-  await refreshAll();
-  await loadTransactions(true);
+  // 账户/分类/汇总与交易明细互不依赖，并发拉取，省掉一段串行等待。
+  await Promise.all([refreshAll(), loadTransactions(true)]);
   navigate('overview');
   render();
-  await loadToken();
+  hideSplash();
+  loadToken(); // 不 await：只有设置页用到，不该拖慢首屏
 }
 
 /**
@@ -1107,6 +1118,11 @@ window.addEventListener('unhandledrejection', (e) => {
 });
 
 if ('serviceWorker' in navigator) {
+  // 首次访问时 Service Worker 会立刻接管（clients.claim），这会触发
+  // controllerchange；此时页面本来就是新的，再 reload 一次纯属白等一整个加载。
+  // 只有「本来就有旧版本在控制」时才需要重载去换新代码。
+  const hadController = !!navigator.serviceWorker.controller;
+
   window.addEventListener('load', async () => {
     try {
       // updateViaCache:'none' 保证 sw.js 本身永远从网络取，避免旧版本被长期钉住。
@@ -1120,7 +1136,7 @@ if ('serviceWorker' in navigator) {
   // 新版本接管后自动重载一次，确保页面跑的是最新代码。
   let reloaded = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (reloaded) return;
+    if (reloaded || !hadController) return;
     reloaded = true;
     location.reload();
   });
@@ -1128,6 +1144,8 @@ if ('serviceWorker' in navigator) {
 
 boot().catch((e) => {
   console.error(e);
+  // 启动失败也必须收起启动占位，否则会一直停在 logo 上。
+  hideSplash();
   showAuth(false);
   $('#auth-error').textContent = `无法连接服务器：${e.message}`;
   $('#auth-error').classList.remove('hidden');

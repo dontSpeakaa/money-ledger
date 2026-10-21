@@ -51,6 +51,23 @@ npm run make-icons # 重新生成 PWA 图标
   登录后立刻掉线。`MONEY_INSECURE_COOKIE=1` 可强制不加（仅调试用）。
 - 测试用例数变化时同步更新 README 中的数字。
 
+## 启动速度
+
+`sw.js` 用「缓存优先 + 后台更新」（stale-while-revalidate）：首屏直接读本地缓存，
+新版本在后台下载、下次打开生效。**不要改回「网络优先」** —— 那样每次打开都要等
+一整轮网络往返，手机上感知明显变慢。改缓存策略时记得同时改 `public/sw.js` 和
+`scripts/build-static.js` 里内联的那份（后者是相对路径版），并把 `CACHE` 版本号加一。
+
+其他几处不能回退的点：
+
+- `index.html` 的 `#splash` 保证 JS 就绪前不白屏；`boot()` 失败路径也要 `hideSplash()`，
+  否则会一直卡在 logo。
+- `app.js` 顶部的 `localApiReady` 让 `local-api.js` 的 import 提前开始，和启动流程并行。
+- `enterApp()` 里 `refreshAll()` 与 `loadTransactions()` 用 `Promise.all` 并发，
+  两者互不依赖。
+- `loadToken()` 不要 `await`，只有设置页用得到。
+- `controllerchange` 只在「本来就有旧 SW 控制」时才 reload，否则首次访问会白等一次完整加载。
+
 ## 部署到 GitHub Pages
 
 ```bash
