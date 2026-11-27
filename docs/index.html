@@ -64,6 +64,18 @@
 
   <main id="main">
 
+    <!-- 对话（主页） -->
+    <section class="view" id="view-chat">
+      <div class="chat-head">
+        <div>
+          <h2>AI 记账</h2>
+          <p class="muted small" id="chat-sub">说一句话，我来记账</p>
+        </div>
+        <button class="link" id="btn-chat-clear">清空对话</button>
+      </div>
+      <div id="chat-log" class="chat-log"></div>
+    </section>
+
     <!-- 总览 -->
     <section class="view" id="view-overview">
       <div class="hero card">
@@ -110,8 +122,37 @@
 
     <!-- 设置 -->
     <section class="view hidden" id="view-settings">
-      <div class="section-head"><h2>账户</h2><button class="link" id="btn-add-account">＋ 新增</button></div>
+      <div class="section-head"><h2>AI 接口</h2></div>
+      <div class="card stack-sm" id="ai-card">
+        <p class="muted small">
+          填一个 OpenAI 兼容的接口（OpenAI / DeepSeek / 通义千问 / Moonshot / 自建中转都行）。
+          保存后回到「对话」，说一句「午饭 38」就能自动归类记账。
+        </p>
+        <div class="chip-row" id="ai-presets"></div>
+        <label class="field"><span>接口地址</span>
+          <input id="ai-base" type="url" inputmode="url" autocomplete="off" spellcheck="false"
+                 placeholder="https://api.openai.com/v1"></label>
+        <label class="field"><span>模型</span>
+          <input id="ai-model" type="text" autocomplete="off" spellcheck="false" placeholder="gpt-4o-mini"></label>
+        <label class="field"><span>API Key</span>
+          <input id="ai-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-..."></label>
+        <p class="muted small" id="ai-key-state">尚未填写</p>
+        <div class="grid-2">
+          <button class="btn ghost" id="btn-ai-test">测试连接</button>
+          <button class="btn primary" id="btn-ai-save">保存</button>
+        </div>
+        <p class="muted small" id="ai-hint"></p>
+        <p class="muted small hidden" id="ai-local-note">
+          纯手机模式下由浏览器直连服务商。若服务商不允许跨域（CORS），请改用服务器模式。
+        </p>
+      </div>
+
+      <div class="section-head"><h2>账户</h2><span class="muted small">由 AI 配置</span></div>
       <div id="settings-accounts" class="stack"></div>
+      <p class="muted small" style="padding:8px 4px 0">
+        账户不再手动添加。在「对话」里说「我有一张招行卡，余额 12000」或「把信用卡余额改成 -1500」，
+        AI 会帮你建好并校准。
+      </p>
 
       <div class="section-head"><h2>分类</h2><button class="link" id="btn-add-category">＋ 新增</button></div>
       <div class="card">
@@ -165,49 +206,18 @@
   </main>
 
   <nav class="tabbar">
-    <button class="tab active" data-view="overview"><span>🏠</span>总览</button>
+    <button class="tab active" data-view="chat"><span>💬</span>对话</button>
+    <button class="tab" data-view="overview"><span>🏠</span>总览</button>
     <button class="tab" data-view="list"><span>📋</span>明细</button>
-    <button class="tab add" id="tab-add"><span>＋</span></button>
     <button class="tab" data-view="stats"><span>📊</span>统计</button>
     <button class="tab" data-view="settings"><span>⚙️</span>设置</button>
   </nav>
-</div>
 
-<!-- ------------------------------------------------------------ 记账面板 -->
-<div id="sheet" class="sheet-backdrop hidden">
-  <div class="sheet">
-    <div class="sheet-handle"></div>
-    <div class="segmented" id="tx-kind">
-      <button class="active" data-kind="expense">支出</button>
-      <button data-kind="income">收入</button>
-      <button data-kind="transfer">转账</button>
-    </div>
-
-    <div class="amount-input">
-      <span>¥</span><input id="tx-amount" type="text" inputmode="decimal" placeholder="0.00">
-    </div>
-
-    <div id="tx-single" class="stack-sm">
-      <label class="field"><span>分类</span><div class="chip-row" id="tx-categories"></div></label>
-      <label class="field"><span>账户</span><select id="tx-account"></select></label>
-    </div>
-
-    <div id="tx-transfer" class="stack-sm hidden">
-      <label class="field"><span>从</span><select id="tx-from"></select></label>
-      <label class="field"><span>到</span><select id="tx-to"></select></label>
-    </div>
-
-    <div class="grid-2">
-      <label class="field"><span>日期</span><input id="tx-date" type="date"></label>
-      <label class="field"><span>备注</span><input id="tx-note" type="text" placeholder="可选"></label>
-    </div>
-
-    <div class="quick-row" id="tx-quick"></div>
-
-    <div class="sheet-actions">
-      <button class="btn ghost" id="btn-sheet-cancel">取消</button>
-      <button class="btn primary" id="btn-sheet-save">保存</button>
-    </div>
+  <!-- 对话框输入条：只在「对话」页显示 -->
+  <div id="chat-composer" class="chat-composer hidden">
+    <textarea id="chat-input" rows="1" enterkeyhint="send"
+              placeholder="例如：午饭 38，地铁 6 块"></textarea>
+    <button class="btn primary chat-send" id="btn-chat-send">发送</button>
   </div>
 </div>
 

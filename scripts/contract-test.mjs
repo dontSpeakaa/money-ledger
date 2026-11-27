@@ -119,6 +119,7 @@ const GETS = [
   '/api/transactions',
   '/api/transactions?month=2026-10',
   '/api/budgets',
+  '/api/ai/config',
   '/api/export.json',
 ];
 
@@ -172,6 +173,14 @@ const sImp = await serverCall('/api/import/csv', { method: 'POST', body: { csv: 
 const lImp = await localCall('/api/import/csv', { method: 'POST', body: { csv: csvIn, default_account_id: bankL } });
 check('CSV 导入返回结构一致', shape(lImp), shape(sImp));
 check('CSV 导入数量一致', [lImp.imported, lImp.skipped], [sImp.imported, sImp.skipped]);
+
+const aiBody = { base_url: 'https://api.example.com/v1', model: 'test-model', api_key: 'sk-test-key' };
+const sAi = await serverCall('/api/ai/config', { method: 'POST', body: aiBody });
+const lAi = await localCall('/api/ai/config', { method: 'POST', body: aiBody });
+check('AI 配置返回结构一致', shape(lAi), shape(sAi));
+check('AI 配置都就绪', [lAi.ready, sAi.ready], [true, true]);
+check('AI 配置都不回传 Key', [JSON.stringify(lAi).includes('sk-test-key'), JSON.stringify(sAi).includes('sk-test-key')], [false, false]);
+check('AI 配置模型一致', [lAi.model, sAi.model], ['test-model', 'test-model']);
 
 const sDel = await serverCall('/api/transactions/1', { method: 'DELETE' });
 const lDel = await localCall('/api/transactions/1', { method: 'DELETE' });

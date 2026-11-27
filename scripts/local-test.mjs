@@ -185,7 +185,20 @@ check('改密后需要重新登录', (await call('/api/me')).authenticated, fals
 await expectError('旧密码失效', () => call('/api/login', { method: 'POST', body: { username: 'me', password: 'secret123' } }), 401);
 check('新密码可登录', (await call('/api/login', { method: 'POST', body: { username: 'me', password: 'newsecret456' } })).ok, true);
 
-console.log('== 12. 数据真的落盘（driver 层） ==');
+console.log('== 12. AI 接口配置 ==');
+
+check('初始未配置', (await call('/api/ai/config')).ready, false);
+await expectError('地址必须是 http(s)', () => call('/api/ai/config', { method: 'POST', body: { base_url: 'ftp://x', model: 'm' } }), 400);
+const aiCfg = await call('/api/ai/config', {
+  method: 'POST',
+  body: { base_url: 'https://api.deepseek.com/v1', model: 'deepseek-chat', api_key: 'sk-local' },
+});
+check('保存后就绪', aiCfg.ready, true);
+check('不回传 Key', JSON.stringify(aiCfg).includes('sk-local'), false);
+await expectError('有地址但模型为空被拒', () => call('/api/ai/config', { method: 'POST', body: { base_url: 'https://api.x.com/v1', model: '' } }), 400);
+check('被拒后配置不变', (await call('/api/ai/config')).model, 'deepseek-chat');
+
+console.log('== 13. 数据真的落盘（driver 层） ==');
 
 const drv = memoryDriver();
 const apiA = createLocalApi(drv);

@@ -24,14 +24,14 @@ cpSync(SRC, OUT, { recursive: true });
 // --- index.html：注入模式标记，路径改相对 ---
 let html = readFileSync(join(OUT, 'index.html'), 'utf8');
 html = html.replace(
-  '<script src="/app.js?v=3" type="module"></script>',
+  '<script src="/app.js?v=4" type="module"></script>',
   `<script>window.MONEY_MODE = 'local';</script>
   <script src="app.js" type="module"></script>`,
 );
 html = html
   .replace(/href="\/manifest\.webmanifest"/, 'href="manifest.webmanifest"')
   .replace(/href="\/icons\//g, 'href="icons/')
-  .replace(/href="\/styles\.css\?v=3"/, 'href="styles.css"');
+  .replace(/href="\/styles\.css\?v=4"/, 'href="styles.css"');
 writeFileSync(join(OUT, 'index.html'), html);
 
 // --- manifest：子路径下要用相对地址 ---
@@ -50,12 +50,13 @@ writeFileSync(join(OUT, 'app.js'), app);
 // --- service worker：本地模式不发任何请求，直接用一份相对路径的版本 ---
 // 策略与服务端版一致：缓存优先 + 后台更新，避免每次启动都等网络。
 const sw = `/* 纯手机模式：静态资源离线可用，全部数据在 IndexedDB 里 */
-const CACHE = 'money-local-v2';
+const CACHE = 'money-local-v3';
 const SHELL = [
   './',
   'index.html',
   'styles.css',
   'app.js',
+  'ai-tools.js',
   'local-api.js',
   'manifest.webmanifest',
   'icons/icon.svg',

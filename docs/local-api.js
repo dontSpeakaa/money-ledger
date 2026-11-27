@@ -401,6 +401,104 @@ function mapHeader(headerRow) {
   return map;
 }
 
+// ------------------------------------------------------------------- AI 接口
+
+/*
+ * 纯手机模式没有服务器可以代理，浏览器直接请求服务商接口。
+ * 配置（含 Key）只存在本机 IndexedDB 里，不会上传到任何地方。
+ * 与服务端一致：对外只暴露「有没有 Key」，不回传 Key 本身。
+ */
+function publicAiConfigIn(s) {
+  const cfg = s.meta?.ai_config || {};
+  return {
+    base_url: cfg.base_url || '',
+    model: cfg.model || '',
+    has_key: !!cfg.api_key,
+    ready: !!(cfg.base_url && cfg.model && cfg.api_key),
+  };
+}
+
+function normalizeBaseUrlIn(value) {
+  const raw = String(value || '').trim().replace(/\/+$/, '');
+  if (!raw) return '';
+  if (!/^https?:\/\//i.test(raw)) throw bad('接口地址必须以 http:// 或 https:// 开头');
+  return raw;
+}
+
+function chatCompletionsUrlIn(baseUrl) {
+  const base = String(baseUrl || '').replace(/\/+$/, '');
+  return /\/chat\/completions$/.test(base) ? base : `${base}/chat/completions`;
+}
+
+function sanitizeMessagesIn(messages) {
+  if (!Array.isArray(messages) || !messages.length) throw bad('对话内容为空');
+  if (messages.length > 80) throw bad('对话太长了，请清空后重新开始');
+  return messages.slice(-80).map((m) => {
+    const out = { role: ['system', 'user', 'assistant', 'tool'].includes(m?.role) ? m.role : 'user' };
+    out.content = typeof m?.content === 'string' ? m.content : m?.content == null ? '' : JSON.stringify(m.content);
+    if (m?.tool_calls) out.tool_calls = m.tool_calls;
+    if (m?.tool_call_id) out.tool_call_id = String(m.tool_call_id);
+    return out;
+  });
+}
+
+async function callAiProviderIn(cfg, body) {
+  if (!cfg || !cfg.base_url || !cfg.model) {
+    throw bad('还没配置 AI 接口，请到「设置 → AI 接口」填写地址、模型和 API Key');
+  }
+  if (!cfg.api_key) throw bad('还没填写 API Key，请到「设置 → AI 接口」补上');
+
+  const payload = {
+    model: cfg.model,
+    messages: sanitizeMessagesIn(body?.messages),
+    temperature: 0.3,
+    stream: false,
+  };
+  if (Array.isArray(body?.tools) && body.tools.length) {
+    payload.tools = body.tools;
+    payload.tool_choice = 'auto';
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
+  let res;
+  let text;
+  try {
+    res = await fetch(chatCompletionsUrlIn(cfg.base_url), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${cfg.api_key}`,
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    text = await res.text();
+  } catch (err) {
+    const reason = err.name === 'AbortError' ? '请求超时（60 秒）' : err.message;
+    throw new LocalError(
+      502,
+      `连不上 AI 接口：${reason}。纯手机模式是浏览器直连，服务商不允许跨域时请改用服务器模式。`,
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
+  if (!res.ok) {
+    const detail =
+      data?.error?.message || data?.message || String(text || '').slice(0, 300) || '未知错误';
+    throw new LocalError(502, `AI 接口返回错误（${res.status}）：${detail}`);
+  }
+  if (!data) throw new LocalError(502, 'AI 接口返回的不是 JSON，请检查接口地址');
+  return data;
+}
+
 // ------------------------------------------------------------------- 哈希
 
 const toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -921,6 +1019,38 @@ export function createLocalApi(driver) {
         }));
       });
       return { ok: true };
+    }
+
+    // ---- AI 助手 ----
+    if (p === '/api/ai/config' && method === 'GET') {
+      const s = await guard();
+      return publicAiConfigIn(s);
+    }
+
+    if (p === '/api/ai/config' && method === 'POST') {
+      await guard();
+      return store.mutate((s) => {
+        const prev = s.meta.ai_config || {};
+        const cfg = {
+          base_url:
+            b.base_url !== undefined ? normalizeBaseUrlIn(b.base_url) : prev.base_url || '',
+          model: b.model !== undefined ? String(b.model).trim() : prev.model || '',
+          api_key: b.api_key
+            ? String(b.api_key).trim()
+            : b.clear_key
+              ? ''
+              : prev.api_key || '',
+        };
+        if (cfg.base_url && !cfg.model) throw bad('请填写模型名称');
+        s.meta.ai_config = cfg;
+        return publicAiConfigIn(s);
+      });
+    }
+
+    if (p === '/api/ai/chat' && method === 'POST') {
+      await guard();
+      const cfg = (await store.state()).meta.ai_config;
+      return callAiProviderIn(cfg, b);
     }
 
     // 快捷指令 / 自动化在纯手机模式下不可用（没有公网地址可调用）。

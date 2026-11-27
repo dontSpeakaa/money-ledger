@@ -5,6 +5,10 @@
 个人理财账本（PWA）。零外部依赖：Node 原生 `http` + `node:sqlite` + 原生 JS 前端。
 单用户、自托管，数据存在本机 SQLite。
 
+主页是 AI 对话页：用户说「午饭 38」，模型通过工具调用把账记进账本。
+**没有手动记账面板，也没有手动新增账户的入口**——记账和账户配置都走对话，
+不要把这些入口加回来。
+
 ## 两种运行模式（同一份前端）
 
 1. **服务器模式**（`npm start`）：数据存 SQLite，多设备可访问，带登录密码。
@@ -23,7 +27,7 @@
 
 ```bash
 npm start          # 启动服务，默认 PORT=12000，监听 0.0.0.0
-npm test           # 全量测试：冒烟 + 本地模式 + 合同一致性
+npm test           # 全量测试：冒烟 + 本地模式 + AI 助手 + 合同一致性
 npm run build:static  # 生成 docs/（GitHub Pages 用，相对路径 + 本地模式）
 npm run seed-demo  # 写入演示数据 + 演示账号 me / demo123456（会清空账户与交易）
 npm run reset      # 清空数据库（含 -wal / -shm）
@@ -37,11 +41,30 @@ npm run make-icons # 重新生成 PWA 图标
 - `server/index.js` — 路由表 + 鉴权。`requireApiAuth(req, url, body)` 依次尝试
   `Authorization: Bearer`、`X-Api-Token`、`?token=`、JSON body 的 `token`。
 - `public/` — 前端。`app.js` 里 `refreshAll()` 拉账户/分类/汇总，`reloadMonth()` 拉明细。
+- `public/ai-tools.js` — AI 工具定义（`AI_TOOLS`）、系统提示词（`buildSystemPrompt`）、
+  执行函数（`runTool`）。**纯逻辑，不许碰 DOM**：前端 `app.js` 和 `scripts/ai-test.mjs`
+  跑同一份代码，才能在没有浏览器的情况下测真实路径。
 - `public/local-api.js` — 本地模式的后端（`createLocalApi(driver)`），driver 可换：
   浏览器用 `idbDriver`（IndexedDB），node 测试用 `memoryDriver`。
+- `scripts/ai-test.mjs` — AI 工具 + 配置接口测试。只有「服务商 HTTP 响应」是 stub
+  （`globalThis.fetch`），其余走真实业务逻辑。
 - `scripts/contract-test.mjs` — 服务端 vs 本地模式的返回结构对比。
 - `data/money.db` — 运行时数据，已 gitignore。
 - `docs/` — `build:static` 产物，GitHub Pages 直接发布这个目录。
+
+## AI 对话的约定
+
+- 工具循环跑在**前端**（`runChatTurn`）：模型返回 `tool_calls` → `runTool` 执行 →
+  结果以 `role: 'tool'` 喂回去，最多 6 轮。服务端只做转发，不参与循环。
+- 每个工具都落在已有的 `/api/*` 接口上，所以服务器模式和纯手机模式行为天然一致。
+  加新工具时：`AI_TOOLS` 里写 schema、`runTool` 里实现、`buildSystemPrompt` 里补一条规则、
+  `scripts/ai-test.mjs` 里加断言。
+- **API Key 永远不回传浏览器**。`GET /api/ai/config` 只给 `base_url / model / has_key / ready`；
+  `POST` 时 `api_key` 为空表示「不修改」，`clear_key: true` 才是清空。两边（server/local）必须一致，
+  合同测试会比对结构。
+- 服务器模式由服务端 `fetch` 服务商（Key 不出服务端）；纯手机模式浏览器直连，要求对方允许 CORS。
+  错误信息里不要带 Key 或 Authorization 头。
+- 日期沿用全项目的 UTC 口径（`toISOString().slice(0,10)`），别在 AI 层单独换成本地时区。
 
 ## 注意事项
 
@@ -49,7 +72,9 @@ npm run make-icons # 重新生成 PWA 图标
 - 会话 Cookie 的 `Secure` 由 `setCookie(req, ...)` 按实际协议判断：`req.socket.encrypted`
   或 `X-Forwarded-Proto: https` 才加。局域网 http 访问必须不加，否则 Safari 拒收 Cookie、
   登录后立刻掉线。`MONEY_INSECURE_COOKIE=1` 可强制不加（仅调试用）。
-- 测试用例数变化时同步更新 README 中的数字。
+- 测试用例数变化时同步更新 README 中的数字（冒烟 47 / 本地 75 / AI 70 / 合同 32）。
+- 改静态资源时要同时改 `public/sw.js` 和 `scripts/build-static.js` 里的内联版本，
+  并把两处 `CACHE` 版本号各加一；`docs/` 是 `npm run build:static` 的产物，改完要重新生成。
 
 ## 启动速度
 
