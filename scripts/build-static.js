@@ -24,14 +24,14 @@ cpSync(SRC, OUT, { recursive: true });
 // --- index.html：注入模式标记，路径改相对 ---
 let html = readFileSync(join(OUT, 'index.html'), 'utf8');
 html = html.replace(
-  '<script src="/app.js?v=6" type="module"></script>',
+  '<script src="/app.js?v=7" type="module"></script>',
   `<script>window.MONEY_MODE = 'local';</script>
-  <script src="app.js?v=6" type="module"></script>`,
+  <script src="app.js?v=7" type="module"></script>`,
 );
 html = html
   .replace(/href="\/manifest\.webmanifest"/, 'href="manifest.webmanifest"')
   .replace(/href="\/icons\//g, 'href="icons/')
-  .replace(/href="\/styles\.css\?v=6"/, 'href="styles.css?v=6"');
+  .replace(/href="\/styles\.css\?v=7"/, 'href="styles.css?v=7"');
 writeFileSync(join(OUT, 'index.html'), html);
 
 // --- manifest：子路径下要用相对地址 ---
@@ -54,10 +54,10 @@ const CACHE = 'money-local-v4';
 const SHELL = [
   './',
   'index.html',
-  'styles.css?v=6',
-  'app.js?v=6',
-  'ai-tools.js?v=6',
-  'local-api.js?v=6',
+  'styles.css?v=7',
+  'app.js?v=7',
+  'ai-tools.js?v=7',
+  'local-api.js?v=7',
   'manifest.webmanifest',
   'icons/icon.svg',
   'icons/icon-180.png',

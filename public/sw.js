@@ -8,14 +8,14 @@
  *   - 静态资源缓存优先（带版本号，所以缓存命中就是同一版本），后台再更新。
  *   - 接口请求（/api/）一律走网络，不缓存，避免看到过期账目。
  */
-const CACHE = 'money-shell-v6';
+const CACHE = 'money-shell-v7';
 const SHELL = [
   '/',
   '/index.html',
-  '/styles.css?v=6',
-  '/app.js?v=6',
-  '/ai-tools.js?v=6',
-  '/local-api.js?v=6',
+  '/styles.css?v=7',
+  '/app.js?v=7',
+  '/ai-tools.js?v=7',
+  '/local-api.js?v=7',
   '/manifest.webmanifest',
   '/icons/icon.svg',
   '/icons/icon-180.png',
