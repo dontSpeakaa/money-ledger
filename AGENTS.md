@@ -103,6 +103,11 @@ npm run make-icons # 重新生成 PWA 图标
 `scripts/build-static.js` 里的替换字符串与内联 SW 的 `SHELL` / `CACHE`，最后跑
 `npm run build:static` 重新生成 `docs/`。
 
+对话页是整页滚动的，进入对话（启动、切回标签、刷新）都要停在最下面：
+`renderChat()` 末尾调 `scrollChatToBottom()`（滚窗口，分几拍补偿排版抖动），
+`navigate()` 里只有**非**对话视图才 `scrollTo({ top: 0 })`，
+并且启动时把 `history.scrollRestoration` 设成 `manual`，否则刷新会被浏览器恢复的旧位置盖掉。
+
 `index.html` 里还有一段 5 秒兜底脚本：`window.__booted` 没被 `boot()` 置为 true 就把启动页
 换成「加载失败 + 重新加载」，模块加载失败时用户不会对着空白页。改启动流程时别删它。
 

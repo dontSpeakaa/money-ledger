@@ -1,6 +1,6 @@
 /* 我的账本 - 前端逻辑（原生 JS，无依赖） */
 
-import { AI_TOOLS, buildSystemPrompt, runTool } from './ai-tools.js?v=6';
+import { AI_TOOLS, buildSystemPrompt, runTool } from './ai-tools.js?v=7';
 
 // MONEY_MODE 由构建脚本注入：'local' 表示纯手机模式（数据存本机 IndexedDB），
 // 'server' 或未定义表示连后端。也支持 ?local=1 临时切换，方便在服务器上试本地模式。
@@ -9,13 +9,20 @@ const LOCAL_MODE =
   new URLSearchParams(location.search).get('local') === '1';
 let localApi = null;
 
+// 刷新时不要让浏览器恢复上次的滚动位置，对话页自己决定停在哪（最下面）。
+try {
+  history.scrollRestoration = 'manual';
+} catch {
+  /* 老浏览器不支持就算了 */
+}
+
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 // 本地模式的后端要等用到才 import，但那次 import 是一次网络往返。
 // 这里在脚本一加载就把它启动起来，和后面的启动流程并行，省掉一段串行等待。
 const localApiReady = LOCAL_MODE
-  ? import('./local-api.js?v=6').then((m) => m.createLocalApi(m.idbDriver()))
+  ? import('./local-api.js?v=7').then((m) => m.createLocalApi(m.idbDriver()))
   : null;
 
 const state = {
@@ -516,8 +523,11 @@ function navigate(view) {
   const isChat = view === 'chat';
   document.body.classList.toggle('chat-active', isChat);
   $('#chat-composer')?.classList.toggle('hidden', !isChat);
-  if (isChat) renderChat();
-  window.scrollTo({ top: 0 });
+  if (isChat) {
+    renderChat();
+  } else {
+    window.scrollTo({ top: 0 });
+  }
 }
 
 $$('.tab[data-view]').forEach((t) => t.addEventListener('click', () => navigate(t.dataset.view)));
@@ -651,7 +661,19 @@ function renderChat() {
     return;
   }
   box.innerHTML = chatLog.map(chatMessageHtml).join('') + (chatBusy ? typingHtml() : '');
-  box.lastElementChild?.scrollIntoView({ block: 'end' });
+  scrollChatToBottom();
+}
+
+/**
+ * 对话页是整页滚动的，最新一条在页面最下面，所以直接滚窗口。
+ * 分几拍滚：消息渲染完、字体和头像撑开高度、输入框回缩之后各来一次，
+ * 否则手机上会差一截，停在倒数第二条。
+ */
+function scrollChatToBottom() {
+  const toBottom = () => window.scrollTo(0, document.documentElement.scrollHeight);
+  toBottom();
+  requestAnimationFrame(toBottom);
+  setTimeout(toBottom, 80);
 }
 
 async function loadAiConfig() {
