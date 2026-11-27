@@ -408,11 +408,15 @@ function mapHeader(headerRow) {
  * 配置（含 Key）只存在本机 IndexedDB 里，不会上传到任何地方。
  * 与服务端一致：对外只暴露「有没有 Key」，不回传 Key 本身。
  */
+const DEFAULT_TRANSCRIBE_MODEL_IN = 'whisper-1';
+
 function publicAiConfigIn(s) {
   const cfg = s.meta?.ai_config || {};
   return {
     base_url: cfg.base_url || '',
     model: cfg.model || '',
+    transcribe_model: cfg.transcribe_model || DEFAULT_TRANSCRIBE_MODEL_IN,
+    transcribe_base_url: cfg.transcribe_base_url || '',
     has_key: !!cfg.api_key,
     ready: !!(cfg.base_url && cfg.model && cfg.api_key),
   };
@@ -497,6 +501,77 @@ async function callAiProviderIn(cfg, body) {
   }
   if (!data) throw new LocalError(502, 'AI 接口返回的不是 JSON，请检查接口地址');
   return data;
+}
+
+function audioTranscriptionsUrlIn(baseUrl) {
+  const base = String(baseUrl || '').replace(/\/+$/, '');
+  return /\/audio\/transcriptions$/.test(base) ? base : `${base}/audio/transcriptions`;
+}
+
+const AUDIO_EXT_IN = {
+  'audio/webm': 'webm',
+  'audio/mp4': 'mp4',
+  'audio/mpeg': 'mp3',
+  'audio/ogg': 'ogg',
+  'audio/wav': 'wav',
+};
+
+/** 纯手机模式：浏览器带着本机的 Key 直接请求服务商。 */
+async function transcribeIn(cfg, { audio, mime }) {
+  if (!audio || !(audio instanceof Blob) || !audio.size) throw bad('没有收到录音');
+  if (audio.size > 20 * 1024 * 1024) throw new LocalError(413, '录音太大了，说短一点试试');
+  if (!cfg || !(cfg.base_url || cfg.transcribe_base_url)) {
+    throw bad('还没配置 AI 接口，请到「设置 → AI 接口」填写地址和 Key');
+  }
+  if (!cfg.api_key) throw bad('还没填写 API Key，请到「设置 → AI 接口」补上');
+
+  const type = String(mime || 'audio/webm').split(';')[0].trim().toLowerCase();
+  if (!AUDIO_EXT_IN[type]) throw bad(`不支持的录音格式：${type}`);
+
+  const form = new FormData();
+  form.append('model', cfg.transcribe_model || DEFAULT_TRANSCRIBE_MODEL_IN);
+  form.append('file', audio, `audio.${AUDIO_EXT_IN[type]}`);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
+  let res;
+  let text;
+  try {
+    res = await fetch(audioTranscriptionsUrlIn(cfg.transcribe_base_url || cfg.base_url), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${cfg.api_key}` },
+      body: form,
+      signal: controller.signal,
+    });
+    text = await res.text();
+  } catch (err) {
+    const reason = err.name === 'AbortError' ? '请求超时（60 秒）' : err.message;
+    throw new LocalError(
+      502,
+      `连不上语音接口：${reason}。纯手机模式是浏览器直连，服务商不允许跨域时请改用服务器模式。`,
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
+  if (!res.ok) {
+    const detail =
+      data?.error?.message || data?.message || String(text || '').slice(0, 300) || '未知错误';
+    const hint =
+      res.status === 404
+        ? '。这个地址可能不支持 /audio/transcriptions，可以在设置里单独填一个语音接口地址'
+        : '';
+    throw new LocalError(502, `语音转写失败（${res.status}）：${detail}${hint}`);
+  }
+  const transcript = String(data?.text ?? '').trim();
+  if (!transcript) throw new LocalError(502, '没听清，再说一次试试');
+  return { text: transcript };
 }
 
 // ------------------------------------------------------------------- 哈希
@@ -1035,6 +1110,14 @@ export function createLocalApi(driver) {
           base_url:
             b.base_url !== undefined ? normalizeBaseUrlIn(b.base_url) : prev.base_url || '',
           model: b.model !== undefined ? String(b.model).trim() : prev.model || '',
+          transcribe_model:
+            b.transcribe_model !== undefined
+              ? String(b.transcribe_model).trim()
+              : prev.transcribe_model || '',
+          transcribe_base_url:
+            b.transcribe_base_url !== undefined
+              ? normalizeBaseUrlIn(b.transcribe_base_url)
+              : prev.transcribe_base_url || '',
           api_key: b.api_key
             ? String(b.api_key).trim()
             : b.clear_key
@@ -1051,6 +1134,13 @@ export function createLocalApi(driver) {
       await guard();
       const cfg = (await store.state()).meta.ai_config;
       return callAiProviderIn(cfg, b);
+    }
+
+    // 纯手机模式：b.audio 是 MediaRecorder 录出来的 Blob，直接转给服务商。
+    if (p === '/api/ai/transcribe' && method === 'POST') {
+      await guard();
+      const cfg = (await store.state()).meta.ai_config;
+      return transcribeIn(cfg, { audio: b.audio, mime: b.mime || b.audio?.type });
     }
 
     // 快捷指令 / 自动化在纯手机模式下不可用（没有公网地址可调用）。

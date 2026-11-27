@@ -104,6 +104,18 @@ check "配置不回传 Key" "$(curl -fsS -b "$COOKIES" "$BASE/api/ai/config" | g
 check "空对话被拒" "$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIES" -X POST "$BASE/api/ai/chat" \
   -H 'Content-Type: application/json' -d '{"messages":[]}')" "400"
 
+echo "== 8b. 语音转文字 =="
+check "未登录转写被拒" "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/ai/transcribe" \
+  -H 'Content-Type: audio/webm' --data-binary 'fake')" "401"
+check "没有录音被拒" "$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIES" -X POST "$BASE/api/ai/transcribe" \
+  -H 'Content-Type: audio/webm')" "400"
+check "不支持的格式被拒" "$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIES" -X POST "$BASE/api/ai/transcribe" \
+  -H 'Content-Type: application/x-weird' --data-binary 'fake')" "400"
+check "转写模型默认 whisper-1" "$(curl -fsS -b "$COOKIES" "$BASE/api/ai/config" | jqv 'o.transcribe_model')" "whisper-1"
+check "可单独设置转写模型" "$(curl -fsS -b "$COOKIES" -X POST "$BASE/api/ai/config" -H 'Content-Type: application/json' \
+  -d '{"transcribe_model":"gpt-4o-mini-transcribe"}' | jqv 'o.transcribe_model')" "gpt-4o-mini-transcribe"
+check "改转写模型不影响聊天模型" "$(curl -fsS -b "$COOKIES" "$BASE/api/ai/config" | jqv 'o.model')" "test-model"
+
 echo "== 9. 预算、导出、登出 =="
 curl -fsS -b "$COOKIES" -X POST "$BASE/api/budgets" -H 'Content-Type: application/json' \
   -d '{"category":"餐饮","monthly_limit":500}' > /dev/null

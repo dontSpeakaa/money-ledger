@@ -101,7 +101,7 @@ Service Worker 的离线缓存只在 HTTPS 或 `localhost` 下生效；局域网
 
 ## 功能
 
-- 对话：主页就是对话框，说一句话就记账，也能问「今天花了多少」
+- 对话：主页就是对话框，说一句话（或按麦克风说）就记账，也能问「今天花了多少」
 - 总览：净资产、本月收支、账户余额、支出构成、近 6 个月趋势、分类排行
 - 明细：按月查看流水，支持搜索、按账户和分类筛选，点一条可以改或删
 - 账户：全部由 AI 配置（建卡、校准余额、改名、隐藏、删除），没有手动添加入口
@@ -134,9 +134,24 @@ AI 会自己挑分类（餐饮 / 交通 / 购物…）、选账户、写备注�
 
 | 接口 | 说明 |
 | --- | --- |
-| `GET /api/ai/config` | 读取配置，只返回 `base_url` / `model` / `has_key` / `ready` |
+| `GET /api/ai/config` | 读取配置，只返回 `base_url` / `model` / `transcribe_model` / `transcribe_base_url` / `has_key` / `ready` |
 | `POST /api/ai/config` | 保存配置；`api_key` 留空表示不修改，`clear_key: true` 清空 |
 | `POST /api/ai/chat` | 转发 `messages` + `tools` 给服务商，原样返回它的 JSON |
+| `POST /api/ai/transcribe` | 语音转文字：请求体是录音二进制，服务端转成 multipart 发给服务商的 `/audio/transcriptions` |
+
+### 语音输入
+
+输入框左边的 🎙️ 按一下开始录，再按一下（或说满 60 秒）自动结束：
+
+1. 录音由浏览器 `MediaRecorder` 完成（iPhone 上是 `audio/mp4`，安卓是 `audio/webm`）
+2. 转文字复用同一个 AI 接口的 `/audio/transcriptions`，默认模型 `whisper-1`
+3. 识别结果填进输入框并**直接发送**，接下来就是普通的记账流程
+
+需要服务商支持 Whisper 这类语音接口。如果你的聊天模型不支持（比如 DeepSeek），
+在设置页「语音接口地址」里单独填一个支持 Whisper 的地址即可，Key 沿用同一个。
+
+不支持录音的老浏览器（iOS 14.3 以前）不会显示麦克风按钮，可以直接用键盘上的
+听写键，效果一样。
 
 服务器模式下 API Key 只存在服务端的 SQLite 里，浏览器永远拿不到；
 纯手机模式下 Key 存在本机 IndexedDB，浏览器直连服务商（要求服务商允许跨域）。
@@ -173,7 +188,7 @@ http://<服务器IP>:12000/api/quick?token=<令牌>&amount=38.5&category=餐饮&
 ## 开发
 
 ```bash
-npm test           # 冒烟（47 项）+ 本地模式（75 项）+ AI 助手（70 项）+ 合同一致性（32 项）
+npm test           # 冒烟（53 项）+ 本地模式（75 项）+ AI 助手（87 项）+ 合同一致性（40 项）
 npm run make-icons # 由 icon.svg 重新生成各尺寸 PNG 图标
 ```
 
