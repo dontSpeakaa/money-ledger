@@ -429,6 +429,26 @@ body.chat-active .chat-log { padding-bottom: 96px; }
   padding: 11px 14px; border-radius: 14px; line-height: 1.35;
 }
 .chat-send { min-height: 44px; min-width: 72px; padding: 0 16px; border-radius: 14px; }
+.chat-mic {
+  min-height: 44px; min-width: 44px; padding: 0; border-radius: 14px;
+  font-size: 19px; line-height: 1;
+}
+.chat-mic.recording {
+  background: var(--neg); border-color: var(--neg); color: #fff;
+  animation: mic-pulse 1.1s ease-in-out infinite;
+}
+@keyframes mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(229, 72, 77, .45); }
+  50% { box-shadow: 0 0 0 10px rgba(229, 72, 77, 0); }
+}
+
+/* 启动彻底失败时的兜底卡片 */
+.boot-error {
+  position: fixed; inset: 0; z-index: 90;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px; background: var(--bg);
+}
+.boot-error .card { width: 100%; max-width: 380px; }
 
 @media (min-width: 640px) {
   main { max-width: 620px; margin: 0 auto; padding: 18px 18px 0; }

@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -77,6 +78,18 @@ function send(res, status, body, headers = {}) {
 
 function sendJson(res, status, data, headers) {
   send(res, status, JSON.stringify(data), headers);
+}
+
+/** 二进制请求体（录音）：不做 utf8 解码，原样交给 handler。 */
+async function readRawBody(req, limit = 20 * 1024 * 1024) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) throw new HttpError(413, '请求体过大');
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
 }
 
 async function readBody(req, limit = 4 * 1024 * 1024) {
@@ -374,12 +387,16 @@ function readAiConfig() {
   }
 }
 
+const DEFAULT_TRANSCRIBE_MODEL = 'whisper-1';
+
 /** 对外只暴露「有没有 key」，绝不把 key 发回浏览器。 */
 function publicAiConfig() {
   const cfg = readAiConfig() || {};
   return {
     base_url: cfg.base_url || '',
     model: cfg.model || '',
+    transcribe_model: cfg.transcribe_model || DEFAULT_TRANSCRIBE_MODEL,
+    transcribe_base_url: cfg.transcribe_base_url || '',
     has_key: !!cfg.api_key,
     ready: !!(cfg.base_url && cfg.model && cfg.api_key),
   };
@@ -403,6 +420,14 @@ function saveAiConfig(body) {
   const cfg = {
     base_url: body.base_url !== undefined ? normalizeBaseUrl(body.base_url) : prev.base_url || '',
     model: body.model !== undefined ? String(body.model).trim() : prev.model || '',
+    transcribe_model:
+      body.transcribe_model !== undefined
+        ? String(body.transcribe_model).trim()
+        : prev.transcribe_model || '',
+    transcribe_base_url:
+      body.transcribe_base_url !== undefined
+        ? normalizeBaseUrl(body.transcribe_base_url)
+        : prev.transcribe_base_url || '',
     api_key: body.api_key ? String(body.api_key).trim() : body.clear_key ? '' : prev.api_key || '',
   };
   if (cfg.base_url && !cfg.model) throw bad('请填写模型名称');
@@ -476,6 +501,91 @@ async function callAiProvider({ messages, tools }) {
   }
   if (!data) throw new HttpError(502, 'AI 接口返回的不是 JSON，请检查接口地址');
   return data;
+}
+
+/** 兼容填到 /v1 或直接填完整的 /audio/transcriptions 两种写法。 */
+function audioTranscriptionsUrl(baseUrl) {
+  const base = String(baseUrl || '').replace(/\/+$/, '');
+  return /\/audio\/transcriptions$/.test(base) ? base : `${base}/audio/transcriptions`;
+}
+
+/** 服务商要 multipart/form-data，Node 没有内置编码器，手拼一个。 */
+function buildAudioForm({ audio, mime, filename, model, language }) {
+  const boundary = `----money${randomBytes(8).toString('hex')}`;
+  const field = (name, value) =>
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`);
+  const parts = [
+    field('model', model),
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
+        `Content-Type: ${mime}\r\n\r\n`,
+    ),
+    audio,
+    Buffer.from(`\r\n--${boundary}--\r\n`),
+  ];
+  if (language) parts.unshift(field('language', language));
+  return { body: Buffer.concat(parts), contentType: `multipart/form-data; boundary=${boundary}` };
+}
+
+const AUDIO_EXT = { 'audio/webm': 'webm', 'audio/mp4': 'mp4', 'audio/mpeg': 'mp3', 'audio/ogg': 'ogg', 'audio/wav': 'wav' };
+
+/** 把录音转成文字。Key 只在服务端使用，浏览器拿不到。 */
+async function transcribeAudio({ audio, mime }) {
+  if (!Buffer.isBuffer(audio) || !audio.length) throw bad('没有收到录音');
+  if (audio.length > 20 * 1024 * 1024) throw new HttpError(413, '录音太大了，说短一点试试');
+
+  const cfg = readAiConfig();
+  if (!cfg || !(cfg.base_url || cfg.transcribe_base_url)) {
+    throw bad('还没配置 AI 接口，请到「设置 → AI 接口」填写地址和 Key');
+  }
+  if (!cfg.api_key) throw bad('还没填写 API Key，请到「设置 → AI 接口」补上');
+
+  const type = String(mime || 'audio/webm').split(';')[0].trim().toLowerCase();
+  if (!AUDIO_EXT[type]) throw bad(`不支持的录音格式：${type}`);
+  const form = buildAudioForm({
+    audio,
+    mime: type,
+    filename: `audio.${AUDIO_EXT[type]}`,
+    model: cfg.transcribe_model || DEFAULT_TRANSCRIBE_MODEL,
+  });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
+  let res;
+  let text;
+  try {
+    res = await fetch(audioTranscriptionsUrl(cfg.transcribe_base_url || cfg.base_url), {
+      method: 'POST',
+      headers: { 'Content-Type': form.contentType, Authorization: `Bearer ${cfg.api_key}` },
+      body: form.body,
+      signal: controller.signal,
+    });
+    text = await res.text();
+  } catch (err) {
+    const reason = err.name === 'AbortError' ? '请求超时（60 秒）' : err.message;
+    throw new HttpError(502, `连不上语音接口：${reason}`);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
+  if (!res.ok) {
+    const detail =
+      data?.error?.message || data?.message || String(text || '').slice(0, 300) || '未知错误';
+    const hint =
+      res.status === 404
+        ? '。这个地址可能不支持 /audio/transcriptions，可以在设置里单独填一个语音接口地址'
+        : '';
+    throw new HttpError(502, `语音转写失败（${res.status}）：${detail}${hint}`);
+  }
+  const transcript = String(data?.text ?? '').trim();
+  if (!transcript) throw new HttpError(502, '没听清，再说一次试试');
+  return { text: transcript };
 }
 
 // --------------------------------------------------------------------- routing
@@ -829,6 +939,13 @@ const routes = [
     return callAiProvider({ messages: body?.messages, tools: body?.tools });
   }],
 
+  // 语音转文字：浏览器直接把录音的二进制发过来（body 是 Buffer），
+  // 这里再按服务商要求的 multipart 格式转发出去。
+  ['POST', /^\/api\/ai\/transcribe$/, async ({ req, body }) => {
+    requireUser(req);
+    return transcribeAudio({ audio: body, mime: req.headers['content-type'] });
+  }, { raw: true }],
+
   // Apple Shortcuts / automation entry point: record one spend in one request.
   ['POST', /^\/api\/quick$/, async ({ req, url, body }) => {
     requireApiAuth(req, url, body);
@@ -942,10 +1059,14 @@ const server = createServer(async (req, res) => {
   }
 
   try {
-    for (const [method, pattern, handler] of routes) {
+    for (const [method, pattern, handler, opts] of routes) {
       const match = pathname.match(pattern);
       if (!match || req.method !== method) continue;
-      const body = ['POST', 'PATCH', 'PUT'].includes(req.method) ? await readBody(req) : {};
+      const body = !['POST', 'PATCH', 'PUT'].includes(req.method)
+        ? {}
+        : opts?.raw
+          ? await readRawBody(req)
+          : await readBody(req);
       const result = await handler({ req, res, url, body, params: match.slice(1) });
       if (result === null || res.writableEnded) return;
       sendJson(res, 200, result);

@@ -375,5 +375,87 @@ check(
   true,
 );
 
+console.log('== 9. 语音转文字（纯手机模式） ==');
+
+const api2 = createLocalApi(memoryDriver());
+const call2 = (path, opts) => api2.handle(path, opts);
+await call2('/api/setup', { method: 'POST', body: { username: 'me', password: 'demo123456' } });
+
+const clip = (type = 'audio/webm', text = 'fakeaudio') => new Blob([text], { type });
+
+await expectError(
+  '没配置接口时拒绝转写',
+  () => call2('/api/ai/transcribe', { method: 'POST', body: { audio: clip() } }),
+  400,
+);
+
+await call2('/api/ai/config', {
+  method: 'POST',
+  body: { base_url: 'https://api.openai.com/v1', model: 'gpt-4o-mini', api_key: 'sk-audio' },
+});
+check('转写模型默认 whisper-1', (await call2('/api/ai/config')).transcribe_model, 'whisper-1');
+await expectError(
+  '没有录音时拒绝',
+  () => call2('/api/ai/transcribe', { method: 'POST', body: {} }),
+  400,
+);
+await expectError(
+  '不支持的音频格式被拒',
+  () => call2('/api/ai/transcribe', { method: 'POST', body: { audio: clip('audio/x-weird') } }),
+  400,
+);
+
+let audioCall = null;
+globalThis.fetch = async (url, opts) => {
+  audioCall = { url, opts };
+  return { ok: true, status: 200, text: async () => JSON.stringify({ text: ' 午饭 38 ' }) };
+};
+
+const heard = await call2('/api/ai/transcribe', { method: 'POST', body: { audio: clip() } });
+check('返回识别文字', heard.text, '午饭 38');
+check('请求打到 /audio/transcriptions', audioCall.url, 'https://api.openai.com/v1/audio/transcriptions');
+check('带上 Bearer Key', audioCall.opts.headers.Authorization, 'Bearer sk-audio');
+check('默认模型 whisper-1', audioCall.opts.body.get('model'), 'whisper-1');
+check('文件名带扩展名', audioCall.opts.body.get('file').name, 'audio.webm');
+check('录音原样上传', await audioCall.opts.body.get('file').text(), 'fakeaudio');
+
+await call2('/api/ai/config', {
+  method: 'POST',
+  body: { transcribe_model: 'gpt-4o-mini-transcribe' },
+});
+await call2('/api/ai/transcribe', { method: 'POST', body: { audio: clip() } });
+check('可换成别的转写模型', audioCall.opts.body.get('model'), 'gpt-4o-mini-transcribe');
+check('聊天模型不受影响', (await call2('/api/ai/config')).model, 'gpt-4o-mini');
+
+// 聊天和语音可以分开配置：DeepSeek 聊天 + OpenAI 转写
+await call2('/api/ai/config', {
+  method: 'POST',
+  body: { base_url: 'https://api.deepseek.com/v1', transcribe_base_url: 'https://api.openai.com/v1/' },
+});
+await call2('/api/ai/transcribe', { method: 'POST', body: { audio: clip() } });
+check('转写走单独的地址', audioCall.url, 'https://api.openai.com/v1/audio/transcriptions');
+check('单独地址末尾斜杠去掉', (await call2('/api/ai/config')).transcribe_base_url, 'https://api.openai.com/v1');
+await call2('/api/ai/config', { method: 'POST', body: { transcribe_base_url: '' } });
+await call2('/api/ai/transcribe', { method: 'POST', body: { audio: clip() } });
+check('清空后回落到聊天地址', audioCall.url, 'https://api.deepseek.com/v1/audio/transcriptions');
+
+globalThis.fetch = async () => ({
+  ok: false,
+  status: 400,
+  text: async () => JSON.stringify({ error: { message: 'Audio file could not be read' } }),
+});
+await expectError(
+  '服务商报错转成 502',
+  () => call2('/api/ai/transcribe', { method: 'POST', body: { audio: clip() } }),
+  502,
+);
+
+globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ text: '   ' }) });
+await expectError(
+  '识别结果为空时报错',
+  () => call2('/api/ai/transcribe', { method: 'POST', body: { audio: clip() } }),
+  502,
+);
+
 console.log(`\n通过 ${pass} 项，失败 ${fail} 项`);
 process.exit(fail ? 1 : 0);

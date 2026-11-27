@@ -24,14 +24,14 @@ cpSync(SRC, OUT, { recursive: true });
 // --- index.html：注入模式标记，路径改相对 ---
 let html = readFileSync(join(OUT, 'index.html'), 'utf8');
 html = html.replace(
-  '<script src="/app.js?v=4" type="module"></script>',
+  '<script src="/app.js?v=6" type="module"></script>',
   `<script>window.MONEY_MODE = 'local';</script>
-  <script src="app.js" type="module"></script>`,
+  <script src="app.js?v=6" type="module"></script>`,
 );
 html = html
   .replace(/href="\/manifest\.webmanifest"/, 'href="manifest.webmanifest"')
   .replace(/href="\/icons\//g, 'href="icons/')
-  .replace(/href="\/styles\.css\?v=4"/, 'href="styles.css"');
+  .replace(/href="\/styles\.css\?v=6"/, 'href="styles.css?v=6"');
 writeFileSync(join(OUT, 'index.html'), html);
 
 // --- manifest：子路径下要用相对地址 ---
@@ -50,14 +50,14 @@ writeFileSync(join(OUT, 'app.js'), app);
 // --- service worker：本地模式不发任何请求，直接用一份相对路径的版本 ---
 // 策略与服务端版一致：缓存优先 + 后台更新，避免每次启动都等网络。
 const sw = `/* 纯手机模式：静态资源离线可用，全部数据在 IndexedDB 里 */
-const CACHE = 'money-local-v3';
+const CACHE = 'money-local-v4';
 const SHELL = [
   './',
   'index.html',
-  'styles.css',
-  'app.js',
-  'ai-tools.js',
-  'local-api.js',
+  'styles.css?v=6',
+  'app.js?v=6',
+  'ai-tools.js?v=6',
+  'local-api.js?v=6',
   'manifest.webmanifest',
   'icons/icon.svg',
   'icons/icon-180.png',
@@ -89,9 +89,27 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (url.origin !== location.origin) return;
 
+  // 页面导航网络优先：保证拿到的 HTML 和它引用的 ?v= 资源是同一版本。
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open(CACHE);
+        try {
+          const res = await fetch(request);
+          if (res && res.ok) cache.put('index.html', res.clone());
+          return res;
+        } catch {
+          const cached = (await cache.match('index.html')) || (await cache.match('./'));
+          return cached || Response.error();
+        }
+      })(),
+    );
+    return;
+  }
+
   event.respondWith(
     caches.open(CACHE).then(async (cache) => {
-      const cached = await cache.match(request, { ignoreSearch: true });
+      const cached = await cache.match(request);
 
       // 后台更新，不阻塞本次响应。
       const network = fetch(request)
@@ -104,12 +122,7 @@ self.addEventListener('fetch', (event) => {
       if (cached) return cached;
 
       const res = await network;
-      if (res) return res;
-      if (request.mode === 'navigate') {
-        const shell = await cache.match('index.html', { ignoreSearch: true });
-        if (shell) return shell;
-      }
-      return Response.error();
+      return res || Response.error();
     }),
   );
 });

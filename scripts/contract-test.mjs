@@ -182,6 +182,67 @@ check('AI 配置都就绪', [lAi.ready, sAi.ready], [true, true]);
 check('AI 配置都不回传 Key', [JSON.stringify(lAi).includes('sk-test-key'), JSON.stringify(sAi).includes('sk-test-key')], [false, false]);
 check('AI 配置模型一致', [lAi.model, sAi.model], ['test-model', 'test-model']);
 
+console.log('== 语音转写：两种模式发给服务商的字段要一致 ==');
+
+// 起一个假的「服务商」，把两种模式转发的请求都收下来对比。
+const { createServer } = await import('node:http');
+const seen = [];
+const provider = createServer((req, res) => {
+  const chunks = [];
+  req.on('data', (c) => chunks.push(c));
+  req.on('end', async () => {
+    const raw = Buffer.concat(chunks);
+    const form = await new Response(raw, {
+      headers: { 'Content-Type': String(req.headers['content-type'] || '') },
+    }).formData();
+    const file = form.get('file');
+    seen.push({
+      path: req.url,
+      auth: req.headers.authorization,
+      model: form.get('model'),
+      filename: file?.name,
+      fileType: file?.type,
+      content: await file?.text(),
+    });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ text: '午饭 38' }));
+  });
+});
+await new Promise((r) => provider.listen(0, '127.0.0.1', r));
+const providerBase = `http://127.0.0.1:${provider.address().port}/v1`;
+
+const audioCfg = { base_url: providerBase, model: 'test-model', api_key: 'sk-audio-key' };
+await serverCall('/api/ai/config', { method: 'POST', body: audioCfg });
+await localCall('/api/ai/config', { method: 'POST', body: audioCfg });
+
+const audio = new Blob(['fake-audio-bytes'], { type: 'audio/webm' });
+
+// 服务端：浏览器把二进制原样 POST 过来，服务端再拼 multipart 转发。
+const sRes = await fetch(`${BASE}/api/ai/transcribe`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'audio/webm', Cookie: cookie },
+  body: audio,
+});
+const sJson = await sRes.json();
+// 本地模式：浏览器自己拼 FormData 直接发给服务商。
+const lJson = await localCall('/api/ai/transcribe', {
+  method: 'POST',
+  body: { audio, mime: 'audio/webm' },
+});
+
+check('服务端转写结果', sJson.text, '午饭 38');
+check('本地转写结果', lJson.text, '午饭 38');
+check('两边都打到 /v1/audio/transcriptions', seen.map((x) => x.path), [
+  '/v1/audio/transcriptions',
+  '/v1/audio/transcriptions',
+]);
+check('两边都带 Key', seen.map((x) => x.auth), ['Bearer sk-audio-key', 'Bearer sk-audio-key']);
+check('两边模型字段一致', seen.map((x) => x.model), ['whisper-1', 'whisper-1']);
+check('两边文件名一致', seen.map((x) => x.filename), ['audio.webm', 'audio.webm']);
+check('两边音频类型一致', seen.map((x) => x.fileType), ['audio/webm', 'audio/webm']);
+check('两边音频内容一致', seen.map((x) => x.content), ['fake-audio-bytes', 'fake-audio-bytes']);
+provider.close();
+
 const sDel = await serverCall('/api/transactions/1', { method: 'DELETE' });
 const lDel = await localCall('/api/transactions/1', { method: 'DELETE' });
 check('删除返回结构一致', shape(lDel), shape(sDel));

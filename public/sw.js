@@ -1,21 +1,21 @@
 /*
  * 离线与启动加速。
  *
- * 策略：静态资源「先给缓存，后台悄悄更新」（stale-while-revalidate）。
- * 之前是「先走网络，失败才用缓存」，等于每次打开都要等一轮网络往返，
- * 手机上感知就是慢。现在首屏直接用本地缓存渲染，新版本在后台下载，
- * 下次打开生效。
- *
- * 接口请求（/api/）一律走网络，不缓存，避免看到过期账目。
+ * 策略：
+ *   - 页面导航走网络优先。HTML 里引用的 JS/CSS 带 ?v= 版本号，只有导航拿到的
+ *     是最新 HTML，才会去请求最新版本的资源。之前导航也走缓存，会出现「旧 HTML
+ *     配新 app.js」这种错配，页面直接崩在启动页上。
+ *   - 静态资源缓存优先（带版本号，所以缓存命中就是同一版本），后台再更新。
+ *   - 接口请求（/api/）一律走网络，不缓存，避免看到过期账目。
  */
-const CACHE = 'money-shell-v5';
+const CACHE = 'money-shell-v6';
 const SHELL = [
   '/',
   '/index.html',
-  '/styles.css',
-  '/app.js',
-  '/ai-tools.js',
-  '/local-api.js',
+  '/styles.css?v=6',
+  '/app.js?v=6',
+  '/ai-tools.js?v=6',
+  '/local-api.js?v=6',
   '/manifest.webmanifest',
   '/icons/icon.svg',
   '/icons/icon-180.png',
@@ -48,9 +48,26 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== location.origin) return;
   if (url.pathname.startsWith('/api/')) return;
 
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open(CACHE);
+        try {
+          const res = await fetch(request);
+          if (res && res.ok) cache.put('/index.html', res.clone());
+          return res;
+        } catch {
+          const cached = (await cache.match('/index.html')) || (await cache.match('/'));
+          return cached || Response.error();
+        }
+      })(),
+    );
+    return;
+  }
+
   event.respondWith(
     caches.open(CACHE).then(async (cache) => {
-      const cached = await cache.match(request, { ignoreSearch: true });
+      const cached = await cache.match(request);
 
       // 后台更新，不阻塞本次响应。
       const network = fetch(request)
@@ -63,12 +80,7 @@ self.addEventListener('fetch', (event) => {
       if (cached) return cached;
 
       const res = await network;
-      if (res) return res;
-      if (request.mode === 'navigate') {
-        const shell = await cache.match('/index.html', { ignoreSearch: true });
-        if (shell) return shell;
-      }
-      return Response.error();
+      return res || Response.error();
     }),
   );
 });

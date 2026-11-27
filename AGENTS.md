@@ -59,12 +59,24 @@ npm run make-icons # 重新生成 PWA 图标
 - 每个工具都落在已有的 `/api/*` 接口上，所以服务器模式和纯手机模式行为天然一致。
   加新工具时：`AI_TOOLS` 里写 schema、`runTool` 里实现、`buildSystemPrompt` 里补一条规则、
   `scripts/ai-test.mjs` 里加断言。
-- **API Key 永远不回传浏览器**。`GET /api/ai/config` 只给 `base_url / model / has_key / ready`；
+- **API Key 永远不回传浏览器**。`GET /api/ai/config` 只给
+  `base_url / model / transcribe_model / transcribe_base_url / has_key / ready`；
   `POST` 时 `api_key` 为空表示「不修改」，`clear_key: true` 才是清空。两边（server/local）必须一致，
   合同测试会比对结构。
 - 服务器模式由服务端 `fetch` 服务商（Key 不出服务端）；纯手机模式浏览器直连，要求对方允许 CORS。
   错误信息里不要带 Key 或 Authorization 头。
 - 日期沿用全项目的 UTC 口径（`toISOString().slice(0,10)`），别在 AI 层单独换成本地时区。
+
+## 语音输入的约定
+
+- 录音在浏览器（`MediaRecorder`），转文字在 `/api/ai/transcribe`。服务端模式由服务端拼
+  multipart 转发给服务商的 `/audio/transcriptions`（Key 不出服务端）；纯手机模式浏览器直接
+  `FormData` 请求。两边的字段（model / file 名 / 音频类型）必须一致，合同测试会比对。
+- `transcribe_model` 默认 `whisper-1`，`transcribe_base_url` 留空表示沿用聊天地址
+  （聊天模型不支持 Whisper 时，用户可以单独填一个支持语音的地址）。
+- 录音接口的请求体是**二进制**，走 `readRawBody`（路由表第 4 项 `{ raw: true }`）。
+  别用 `readBody`，它会把音频当 utf8 解码，文件就废了。
+- 识别完直接 `sendChat(text)` 自动发送；录满 60 秒自动停。
 
 ## 注意事项
 
@@ -72,16 +84,27 @@ npm run make-icons # 重新生成 PWA 图标
 - 会话 Cookie 的 `Secure` 由 `setCookie(req, ...)` 按实际协议判断：`req.socket.encrypted`
   或 `X-Forwarded-Proto: https` 才加。局域网 http 访问必须不加，否则 Safari 拒收 Cookie、
   登录后立刻掉线。`MONEY_INSECURE_COOKIE=1` 可强制不加（仅调试用）。
-- 测试用例数变化时同步更新 README 中的数字（冒烟 47 / 本地 75 / AI 70 / 合同 32）。
+- 测试用例数变化时同步更新 README 中的数字（冒烟 / 本地 / AI / 合同，跑一次 `npm test` 看尾部输出）。
 - 改静态资源时要同时改 `public/sw.js` 和 `scripts/build-static.js` 里的内联版本，
   并把两处 `CACHE` 版本号各加一；`docs/` 是 `npm run build:static` 的产物，改完要重新生成。
 
-## 启动速度
+## 启动速度与版本一致性
 
-`sw.js` 用「缓存优先 + 后台更新」（stale-while-revalidate）：首屏直接读本地缓存，
-新版本在后台下载、下次打开生效。**不要改回「网络优先」** —— 那样每次打开都要等
-一整轮网络往返，手机上感知明显变慢。改缓存策略时记得同时改 `public/sw.js` 和
-`scripts/build-static.js` 里内联的那份（后者是相对路径版），并把 `CACHE` 版本号加一。
+`sw.js` 分两段策略：
+
+- **静态资源**：缓存优先 + 后台更新（stale-while-revalidate），首屏直接读本地缓存。
+  前提是 `index.html` 里的资源都带 `?v=N`，缓存命中的一定和 HTML 同一版本。
+- **页面导航**：网络优先，离线才回退缓存。这条不能改回缓存优先 —— 曾经因为导航走缓存，
+  手机上出现「旧 index.html + 新 app.js」，`navigate('chat')` 拿不到 `#chat-composer` 直接抛错，
+  页面永远停在启动页（只显示「我的账本」）。
+
+发版时**必须同时**改这几处的版本号：`public/index.html`（`styles.css?v=` / `app.js?v=`）、
+`public/app.js` 顶部两个 `import ...?v=`、`public/sw.js` 的 `SHELL` 与 `CACHE`、
+`scripts/build-static.js` 里的替换字符串与内联 SW 的 `SHELL` / `CACHE`，最后跑
+`npm run build:static` 重新生成 `docs/`。
+
+`index.html` 里还有一段 5 秒兜底脚本：`window.__booted` 没被 `boot()` 置为 true 就把启动页
+换成「加载失败 + 重新加载」，模块加载失败时用户不会对着空白页。改启动流程时别删它。
 
 其他几处不能回退的点：
 

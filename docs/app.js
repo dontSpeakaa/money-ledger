@@ -1,6 +1,6 @@
 /* 我的账本 - 前端逻辑（原生 JS，无依赖） */
 
-import { AI_TOOLS, buildSystemPrompt, runTool } from './ai-tools.js';
+import { AI_TOOLS, buildSystemPrompt, runTool } from './ai-tools.js?v=6';
 
 // MONEY_MODE 由构建脚本注入：'local' 表示纯手机模式（数据存本机 IndexedDB），
 // 'server' 或未定义表示连后端。也支持 ?local=1 临时切换，方便在服务器上试本地模式。
@@ -15,7 +15,7 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 // 本地模式的后端要等用到才 import，但那次 import 是一次网络往返。
 // 这里在脚本一加载就把它启动起来，和后面的启动流程并行，省掉一段串行等待。
 const localApiReady = LOCAL_MODE
-  ? import('./local-api.js').then((m) => m.createLocalApi(m.idbDriver()))
+  ? import('./local-api.js?v=6').then((m) => m.createLocalApi(m.idbDriver()))
   : null;
 
 const state = {
@@ -177,6 +177,8 @@ function showAuth(setupRequired = false) {
 }
 
 async function boot() {
+  // 告诉 index.html 里的兜底脚本：JS 跑起来了，不用显示「加载失败」。
+  window.__booted = true;
   // 本地模式的界面文案/入口与服务器模式不同，登录前就先调整好，
   // 否则设置页会先闪一下「存在服务器上」的字样。
   if (LOCAL_MODE) {
@@ -190,6 +192,21 @@ async function boot() {
   if (me.setup_required) return showAuth(true);
   if (!me.authenticated) return showAuth(false);
   await enterApp();
+}
+
+/** 启动失败时把错误显示出来，别让用户对着空白页猜。 */
+function showBootError(err) {
+  window.__booted = true;
+  hideSplash();
+  const box = document.createElement('div');
+  box.className = 'boot-error';
+  box.innerHTML = `<div class="card stack-sm">
+      <h3>打开失败</h3>
+      <p class="muted small">${esc(err?.message || String(err))}</p>
+      <button class="btn primary block" id="boot-retry">重新加载</button>
+    </div>`;
+  document.body.appendChild(box);
+  box.querySelector('#boot-retry').onclick = () => location.reload();
 }
 
 function hideSplash() {
@@ -498,7 +515,7 @@ function navigate(view) {
   $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.view === view));
   const isChat = view === 'chat';
   document.body.classList.toggle('chat-active', isChat);
-  $('#chat-composer').classList.toggle('hidden', !isChat);
+  $('#chat-composer')?.classList.toggle('hidden', !isChat);
   if (isChat) renderChat();
   window.scrollTo({ top: 0 });
 }
@@ -646,6 +663,8 @@ function fillAiForm(cfg) {
   if (!cfg) return;
   $('#ai-base').value = cfg.base_url || '';
   $('#ai-model').value = cfg.model || '';
+  $('#ai-transcribe-model').value = cfg.transcribe_model || '';
+  $('#ai-transcribe-base').value = cfg.transcribe_base_url || '';
   $('#ai-key').value = '';
   $('#ai-key-state').textContent = cfg.has_key
     ? '已保存 Key（留空表示不修改）'
@@ -661,6 +680,8 @@ async function saveAiConfig() {
   const body = {
     base_url: $('#ai-base').value.trim(),
     model: $('#ai-model').value.trim(),
+    transcribe_model: $('#ai-transcribe-model').value.trim(),
+    transcribe_base_url: $('#ai-transcribe-base').value.trim(),
   };
   const key = $('#ai-key').value.trim();
   if (key) body.api_key = key;
@@ -782,6 +803,150 @@ $('#btn-chat-clear').onclick = () => {
   saveChat();
   renderChat();
 };
+
+// --------------------------------------------------------------------- 语音输入
+
+// 录音走浏览器的 MediaRecorder，转文字复用同一个 AI 接口的
+// /audio/transcriptions（OpenAI Whisper 兼容）。不引第三方 SDK。
+const MIC_MAX_MS = 60000;
+let recorder = null;
+let recChunks = [];
+let recTimer = null;
+
+const micSupported = () => !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+
+function micSetRecording(on) {
+  const btn = $('#btn-chat-mic');
+  if (btn) {
+    btn.classList.toggle('recording', on);
+    btn.querySelector('.mic-icon').textContent = on ? '⏹' : '🎙️';
+  }
+  const input = $('#chat-input');
+  if (input) input.placeholder = on ? '正在听… 说完点一下 ■ 停止' : '例如：午饭 38，地铁 6 块';
+}
+
+/** Safari 只认 audio/mp4，Chrome 认 webm，挑一个能用的。 */
+function pickAudioMime() {
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'];
+  for (const type of candidates) {
+    if (window.MediaRecorder?.isTypeSupported?.(type)) return type;
+  }
+  return '';
+}
+
+async function transcribeBlob(blob) {
+  const mime = blob.type || 'audio/webm';
+  if (LOCAL_MODE) {
+    if (!localApi) localApi = await localApiReady;
+    try {
+      const data = await localApi.handle('/api/ai/transcribe', {
+        method: 'POST',
+        body: { audio: blob, mime },
+      });
+      return data.text;
+    } catch (err) {
+      throw new Error(err.message || '语音转写失败');
+    }
+  }
+  const res = await fetch('/api/ai/transcribe', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': mime },
+    body: blob,
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { error: text };
+  }
+  if (!res.ok) {
+    if (res.status === 401 && state.view) showAuth();
+    throw new Error(data.error || `语音转写失败 (${res.status})`);
+  }
+  return data.text;
+}
+
+function stopRecording() {
+  clearTimeout(recTimer);
+  recTimer = null;
+  if (recorder && recorder.state !== 'inactive') recorder.stop();
+}
+
+async function startRecording() {
+  if (!micSupported()) {
+    toast('这个浏览器不支持录音，可以用键盘上的语音键', 5000);
+    return;
+  }
+  const cfg = state.ai?.ready ? state.ai : await loadAiConfig().catch(() => null);
+  if (!cfg?.ready) {
+    toast('先到「设置 → AI 接口」填好地址和 Key');
+    navigate('settings');
+    return;
+  }
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    toast(
+      err.name === 'NotAllowedError'
+        ? '没有麦克风权限，请在浏览器设置里允许后再试'
+        : `打不开麦克风：${err.message}`,
+      6000,
+    );
+    return;
+  }
+
+  const mime = pickAudioMime();
+  recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  recChunks = [];
+  recorder.ondataavailable = (e) => {
+    if (e.data && e.data.size) recChunks.push(e.data);
+  };
+  recorder.onstop = async () => {
+    stream.getTracks().forEach((t) => t.stop());
+    const blob = new Blob(recChunks, { type: recorder?.mimeType || mime || 'audio/webm' });
+    recorder = null;
+    recChunks = [];
+    micSetRecording(false);
+    if (blob.size < 1000) {
+      toast('没录到声音，再说一次');
+      return;
+    }
+    toast('正在转成文字…', 8000);
+    try {
+      const text = (await transcribeBlob(blob)).trim();
+      if (!text) {
+        toast('没听清，再说一次');
+        return;
+      }
+      const input = $('#chat-input');
+      input.value = text;
+      autoGrow(input);
+      sendChat(text);
+    } catch (err) {
+      toast(err.message, 6000);
+    }
+  };
+
+  recorder.start();
+  micSetRecording(true);
+  clearTimeout(recTimer);
+  recTimer = setTimeout(stopRecording, MIC_MAX_MS);
+}
+
+$('#btn-chat-mic').onclick = () => {
+  if (recorder) return stopRecording();
+  startRecording().catch((err) => {
+    micSetRecording(false);
+    toast(err.message, 6000);
+  });
+};
+
+// 不支持录音的浏览器（例如老版 iOS）干脆不显示麦克风，免得点了没反应。
+if (!micSupported()) $('#btn-chat-mic')?.classList.add('hidden');
 
 // --------------------------------------------------------------- AI 接口配置
 
@@ -1262,9 +1427,5 @@ if ('serviceWorker' in navigator) {
 
 boot().catch((e) => {
   console.error(e);
-  // 启动失败也必须收起启动占位，否则会一直停在 logo 上。
-  hideSplash();
-  showAuth(false);
-  $('#auth-error').textContent = `无法连接服务器：${e.message}`;
-  $('#auth-error').classList.remove('hidden');
+  showBootError(e);
 });
