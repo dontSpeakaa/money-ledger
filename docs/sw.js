@@ -1,10 +1,11 @@
 /* 纯手机模式：静态资源离线可用，全部数据在 IndexedDB 里 */
-const CACHE = 'money-local-v2';
+const CACHE = 'money-local-v3';
 const SHELL = [
   './',
   'index.html',
   'styles.css',
   'app.js',
+  'ai-tools.js',
   'local-api.js',
   'manifest.webmanifest',
   'icons/icon.svg',

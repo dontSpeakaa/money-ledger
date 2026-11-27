@@ -91,7 +91,20 @@ check "Bearer 头传令牌" "$(curl -fsS -X POST "$BASE/api/quick" -H "Authoriza
 check "撤销令牌后失效" "$(curl -fsS -b "$COOKIES" -X DELETE "$BASE/api/token" > /dev/null; \
   curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/quick?token=$TOKEN" -H 'Content-Type: application/json' -d '{"amount":1}')" "401"
 
-echo "== 8. 预算、导出、登出 =="
+echo "== 8. AI 接口配置 =="
+check "未登录读配置被拒" "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/ai/config")" "401"
+check "未配置时聊天被拒" "$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIES" -X POST "$BASE/api/ai/chat" \
+  -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"hi"}]}')" "400"
+check "非 http 地址被拒" "$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIES" -X POST "$BASE/api/ai/config" \
+  -H 'Content-Type: application/json' -d '{"base_url":"ftp://x","model":"m"}')" "400"
+check "保存配置后就绪" "$(curl -fsS -b "$COOKIES" -X POST "$BASE/api/ai/config" -H 'Content-Type: application/json' \
+  -d '{"base_url":"https://api.example.com/v1/","model":"test-model","api_key":"sk-smoke-secret"}' | jqv 'o.ready')" "true"
+check "地址末尾斜杠去掉" "$(curl -fsS -b "$COOKIES" "$BASE/api/ai/config" | jqv 'o.base_url')" "https://api.example.com/v1"
+check "配置不回传 Key" "$(curl -fsS -b "$COOKIES" "$BASE/api/ai/config" | grep -c 'sk-smoke-secret')" "0"
+check "空对话被拒" "$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIES" -X POST "$BASE/api/ai/chat" \
+  -H 'Content-Type: application/json' -d '{"messages":[]}')" "400"
+
+echo "== 9. 预算、导出、登出 =="
 curl -fsS -b "$COOKIES" -X POST "$BASE/api/budgets" -H 'Content-Type: application/json' \
   -d '{"category":"餐饮","monthly_limit":500}' > /dev/null
 MONTH=$(date +%Y-%m)
@@ -114,7 +127,7 @@ check "https 下 Cookie 带 Secure" \
      -H 'X-Forwarded-Proto: https' -d '{"username":"me","password":"secret123"}' \
      | grep -i '^set-cookie' | grep -ci 'secure')" "1"
 
-echo "== 9. 修改密码 =="
+echo "== 10. 修改密码 =="
 check "当前密码错误被拒" "$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIES" -X POST "$BASE/api/password" \
   -H 'Content-Type: application/json' -d '{"current_password":"wrong","new_password":"abcdef"}')" "401"
 check "新密码过短被拒" "$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIES" -X POST "$BASE/api/password" \

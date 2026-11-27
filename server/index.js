@@ -359,6 +359,125 @@ function importRows(rows, { defaultAccountId, dryRun = false, source = 'import' 
   return report;
 }
 
+// ------------------------------------------------------------------- AI 接口
+
+const AI_CONFIG_KEY = 'ai_config';
+
+function readAiConfig() {
+  const raw = getMeta(AI_CONFIG_KEY);
+  if (!raw) return null;
+  try {
+    const cfg = JSON.parse(raw);
+    return cfg && typeof cfg === 'object' ? cfg : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 对外只暴露「有没有 key」，绝不把 key 发回浏览器。 */
+function publicAiConfig() {
+  const cfg = readAiConfig() || {};
+  return {
+    base_url: cfg.base_url || '',
+    model: cfg.model || '',
+    has_key: !!cfg.api_key,
+    ready: !!(cfg.base_url && cfg.model && cfg.api_key),
+  };
+}
+
+function normalizeBaseUrl(value) {
+  const raw = String(value || '').trim().replace(/\/+$/, '');
+  if (!raw) return '';
+  if (!/^https?:\/\//i.test(raw)) throw bad('接口地址必须以 http:// 或 https:// 开头');
+  return raw;
+}
+
+/** 兼容两种写法：填到 /v1 或直接填完整的 /chat/completions。 */
+function chatCompletionsUrl(baseUrl) {
+  const base = String(baseUrl || '').replace(/\/+$/, '');
+  return /\/chat\/completions$/.test(base) ? base : `${base}/chat/completions`;
+}
+
+function saveAiConfig(body) {
+  const prev = readAiConfig() || {};
+  const cfg = {
+    base_url: body.base_url !== undefined ? normalizeBaseUrl(body.base_url) : prev.base_url || '',
+    model: body.model !== undefined ? String(body.model).trim() : prev.model || '',
+    api_key: body.api_key ? String(body.api_key).trim() : body.clear_key ? '' : prev.api_key || '',
+  };
+  if (cfg.base_url && !cfg.model) throw bad('请填写模型名称');
+  setMeta(AI_CONFIG_KEY, JSON.stringify(cfg));
+  return publicAiConfig();
+}
+
+/** 只转发模型能理解的字段，别把浏览器里的任意结构塞给上游。 */
+function sanitizeMessages(messages) {
+  if (!Array.isArray(messages) || !messages.length) throw bad('对话内容为空');
+  if (messages.length > 80) throw bad('对话太长了，请清空后重新开始');
+  return messages.slice(-80).map((m) => {
+    const out = { role: ['system', 'user', 'assistant', 'tool'].includes(m?.role) ? m.role : 'user' };
+    out.content = typeof m?.content === 'string' ? m.content : m?.content == null ? '' : JSON.stringify(m.content);
+    if (m?.tool_calls) out.tool_calls = m.tool_calls;
+    if (m?.tool_call_id) out.tool_call_id = String(m.tool_call_id);
+    return out;
+  });
+}
+
+async function callAiProvider({ messages, tools }) {
+  const cfg = readAiConfig();
+  if (!cfg || !cfg.base_url || !cfg.model) {
+    throw bad('还没配置 AI 接口，请到「设置 → AI 接口」填写地址、模型和 API Key');
+  }
+  if (!cfg.api_key) throw bad('还没填写 API Key，请到「设置 → AI 接口」补上');
+
+  const payload = {
+    model: cfg.model,
+    messages: sanitizeMessages(messages),
+    temperature: 0.3,
+    stream: false,
+  };
+  if (Array.isArray(tools) && tools.length) {
+    payload.tools = tools;
+    payload.tool_choice = 'auto';
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
+  let res;
+  let text;
+  try {
+    res = await fetch(chatCompletionsUrl(cfg.base_url), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${cfg.api_key}`,
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    text = await res.text();
+  } catch (err) {
+    const reason = err.name === 'AbortError' ? '请求超时（60 秒）' : err.message;
+    throw new HttpError(502, `连不上 AI 接口：${reason}`);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
+  if (!res.ok) {
+    const detail =
+      data?.error?.message || data?.message || String(text || '').slice(0, 300) || '未知错误';
+    throw new HttpError(502, `AI 接口返回错误（${res.status}）：${detail}`);
+  }
+  if (!data) throw new HttpError(502, 'AI 接口返回的不是 JSON，请检查接口地址');
+  return data;
+}
+
 // --------------------------------------------------------------------- routing
 
 const routes = [
@@ -690,6 +809,24 @@ const routes = [
     requireUser(req);
     revokeApiToken();
     return { ok: true };
+  }],
+
+  // ---------------------------------------------------------------- AI 助手
+  ['GET', /^\/api\/ai\/config$/, async ({ req }) => {
+    requireUser(req);
+    return publicAiConfig();
+  }],
+
+  ['POST', /^\/api\/ai\/config$/, async ({ req, body }) => {
+    requireUser(req);
+    return saveAiConfig(body || {});
+  }],
+
+  // 前端负责跑工具循环，这里只把请求转发给用户配置的 OpenAI 兼容接口，
+  // 好处是 API Key 留在服务端，浏览器永远拿不到。
+  ['POST', /^\/api\/ai\/chat$/, async ({ req, body }) => {
+    requireUser(req);
+    return callAiProvider({ messages: body?.messages, tools: body?.tools });
   }],
 
   // Apple Shortcuts / automation entry point: record one spend in one request.

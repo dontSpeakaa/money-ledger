@@ -8,12 +8,13 @@
  *
  * 接口请求（/api/）一律走网络，不缓存，避免看到过期账目。
  */
-const CACHE = 'money-shell-v4';
+const CACHE = 'money-shell-v5';
 const SHELL = [
   '/',
   '/index.html',
   '/styles.css',
   '/app.js',
+  '/ai-tools.js',
   '/local-api.js',
   '/manifest.webmanifest',
   '/icons/icon.svg',

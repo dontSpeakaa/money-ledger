@@ -1,5 +1,7 @@
 /* 我的账本 - 前端逻辑（原生 JS，无依赖） */
 
+import { AI_TOOLS, buildSystemPrompt, runTool } from './ai-tools.js';
+
 // MONEY_MODE 由构建脚本注入：'local' 表示纯手机模式（数据存本机 IndexedDB），
 // 'server' 或未定义表示连后端。也支持 ?local=1 临时切换，方便在服务器上试本地模式。
 const LOCAL_MODE =
@@ -18,7 +20,7 @@ const localApiReady = LOCAL_MODE
 
 const state = {
   month: new Date().toISOString().slice(0, 7),
-  view: 'overview',
+  view: 'chat',
   accounts: [],
   categories: [],
   summary: null,
@@ -26,9 +28,8 @@ const state = {
   total: 0,
   offset: 0,
   filters: { q: '', accountId: null, category: null },
-  kind: 'expense',
-  pickedCategory: null,
   token: null,
+  ai: null,
   local: LOCAL_MODE,
 };
 
@@ -200,10 +201,11 @@ async function enterApp() {
   $('#app').classList.remove('hidden');
   // 账户/分类/汇总与交易明细互不依赖，并发拉取，省掉一段串行等待。
   await Promise.all([refreshAll(), loadTransactions(true)]);
-  navigate('overview');
+  navigate('chat');
   render();
   hideSplash();
   loadToken(); // 不 await：只有设置页用到，不该拖慢首屏
+  loadAiConfig().then(fillAiForm).catch(() => {});
 }
 
 /**
@@ -227,6 +229,7 @@ function applyLocalUi() {
   $('#backup-section')?.classList.remove('hidden');
   $('#backup-card')?.classList.remove('hidden');
   $('#btn-wipe')?.classList.remove('hidden');
+  $('#ai-local-note')?.classList.remove('hidden');
   $('#storage-note').textContent = '我的账本 · 数据存在这台手机的浏览器里';
   $('#auth-note').textContent = '数据只保存在这台手机上，只有你能看到。';
 }
@@ -263,7 +266,6 @@ async function refreshAll() {
   state.accounts = accounts.accounts;
   state.categories = categories.categories;
   state.summary = summary;
-  renderAccountPickers();
 }
 
 async function reloadMonth() {
@@ -311,14 +313,14 @@ function renderOverview() {
     ? s.accounts
         .map((a) => {
           const t = ACCOUNT_TYPES[a.type] || ACCOUNT_TYPES.other;
-          return `<div class="account-row" data-edit-account="${a.id}">
+          return `<div class="account-row">
             <div class="name"><span class="acct-icon">${t.icon}</span>
               <span>${esc(a.name)}<br><span class="badge">${t.label} · ${a.tx_count} 笔</span></span></div>
             <div class="balance ${a.balance < 0 ? 'neg' : ''}">${money(a.balance)}</div>
           </div>`;
         })
         .join('')
-    : `<div class="empty">还没有账户，去「设置 → 账户」添加你的银行卡、支付宝、微信余额吧。</div>`;
+    : `<div class="empty">还没有账户。<br>去「对话」里说一句：我有一张招商银行卡，余额 12000。</div>`;
 
   const cats = s.by_category.filter((c) => c.total < 0);
   const max = Math.max(...cats.map((c) => -c.total), 1);
@@ -355,7 +357,7 @@ function txRow(t) {
   </div>`;
 }
 
-const emptyMonth = () => `<div class="empty">本月还没有记录。<br>点下面的「＋」开始记一笔。</div>`;
+const emptyMonth = () => `<div class="empty">本月还没有记录。<br>去「对话」里说一句，我来记账。</div>`;
 
 function renderList() {
   const meta = $('#list-meta');
@@ -468,7 +470,7 @@ function renderSettings() {
     [...active, ...archived]
       .map((a) => {
         const t = ACCOUNT_TYPES[a.type] || ACCOUNT_TYPES.other;
-        return `<div class="account-row" data-edit-account="${a.id}">
+        return `<div class="account-row">
           <div class="name"><span class="acct-icon">${t.icon}</span>
             <span>${esc(a.name)}<br><span class="badge">${t.label}${a.archived ? ' · 已隐藏' : ''}</span></span></div>
           <div class="balance ${a.balance < 0 ? 'neg' : ''}">${money(a.balance)}</div>
@@ -488,36 +490,16 @@ function renderSettings() {
     .join('');
 }
 
-function renderAccountPickers() {
-  const active = state.accounts.filter((a) => !a.archived);
-  const opts = active.map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
-  for (const id of ['#tx-account', '#tx-from', '#tx-to']) {
-    const el = $(id);
-    const prev = el.value;
-    el.innerHTML = opts;
-    if (prev && active.some((a) => String(a.id) === prev)) el.value = prev;
-  }
-  if (active.length > 1 && !$('#tx-to').value) $('#tx-to').value = active[1].id;
-
-  const kind = state.kind;
-  const cats = state.categories.filter((c) => (kind === 'income' ? c.kind === 'income' : c.kind === 'expense'));
-  $('#tx-categories').innerHTML = cats
-    .map(
-      (c) =>
-        `<button class="chip ${state.pickedCategory === c.name ? 'active' : ''}" data-pick-category="${esc(c.name)}">${c.icon} ${esc(c.name)}</button>`,
-    )
-    .join('');
-
-  const quick = [10, 20, 50, 100, 200, 500];
-  $('#tx-quick').innerHTML = quick.map((v) => `<button class="chip" data-quick="${v}">+${v}</button>`).join('');
-}
-
 // -------------------------------------------------------------------- 视图切换
 
 function navigate(view) {
   state.view = view;
   $$('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${view}`));
   $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.view === view));
+  const isChat = view === 'chat';
+  document.body.classList.toggle('chat-active', isChat);
+  $('#chat-composer').classList.toggle('hidden', !isChat);
+  if (isChat) renderChat();
   window.scrollTo({ top: 0 });
 }
 
@@ -546,95 +528,304 @@ $('#btn-refresh').onclick = async () => {
   toast('已刷新');
 };
 
-// ------------------------------------------------------------------ 记账面板
+// ------------------------------------------------------------------- AI 对话
 
-function openSheet() {
-  if (!state.accounts.filter((a) => !a.archived).length) {
-    toast('请先添加一个账户');
-    return navigate('settings');
-  }
-  state.kind = 'expense';
-  state.pickedCategory = null;
-  $('#tx-amount').value = '';
-  $('#tx-note').value = '';
-  $('#tx-date').value = todayStr();
-  $$('#tx-kind button').forEach((b) => b.classList.toggle('active', b.dataset.kind === state.kind));
-  $('#tx-single').classList.remove('hidden');
-  $('#tx-transfer').classList.add('hidden');
-  renderAccountPickers();
-  $('#sheet').classList.remove('hidden');
-  setTimeout(() => $('#tx-amount').focus(), 120);
-}
+// 两种模式的账本是两套数据，对话记录也分开存，避免串台。
+const CHAT_KEY = LOCAL_MODE ? 'money_chat_v1_local' : 'money_chat_v1';
+const MAX_CONTEXT = 20;      // 每次带给模型的历史条数
+const MAX_TOOL_ROUNDS = 6;   // 一轮对话里最多让模型连续调几次工具
 
-function closeSheet() {
-  $('#sheet').classList.add('hidden');
-}
+const AI_PRESETS = [
+  { label: 'OpenAI', base_url: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+  { label: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+  { label: '通义千问', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
+  { label: 'Moonshot', base_url: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
+  { label: '智谱', base_url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' },
+];
 
-$('#tab-add').onclick = () => openSheet();
-$('#btn-sheet-cancel').onclick = closeSheet;
-$('#sheet').addEventListener('click', (e) => {
-  if (e.target.id === 'sheet') closeSheet();
-});
+const CHAT_SUGGESTIONS = [
+  '午饭 38，地铁 6 块',
+  '今天花了多少？',
+  '工资到账 12000',
+  '我有一张招行卡，余额 12000',
+];
 
-$$('#tx-kind button').forEach((b) =>
-  b.addEventListener('click', () => {
-    state.kind = b.dataset.kind;
-    state.pickedCategory = null;
-    $$('#tx-kind button').forEach((x) => x.classList.toggle('active', x === b));
-    $('#tx-single').classList.toggle('hidden', state.kind === 'transfer');
-    $('#tx-transfer').classList.toggle('hidden', state.kind !== 'transfer');
-    renderAccountPickers();
-  }),
-);
+let chatLog = loadChat();
+let chatBusy = false;
 
-$('#tx-categories').addEventListener('click', (e) => {
-  const btn = e.target.closest('[data-pick-category]');
-  if (!btn) return;
-  state.pickedCategory = btn.dataset.pickCategory;
-  renderAccountPickers();
-});
-
-$('#tx-quick').addEventListener('click', (e) => {
-  const btn = e.target.closest('[data-quick]');
-  if (!btn) return;
-  const cur = Number($('#tx-amount').value.replace(/[^\d.]/g, '')) || 0;
-  $('#tx-amount').value = String(cur + Number(btn.dataset.quick));
-});
-
-$('#btn-sheet-save').onclick = async () => {
-  const amount = Number($('#tx-amount').value.replace(/[^\d.-]/g, ''));
-  if (!Number.isFinite(amount) || amount === 0) return toast('请输入金额');
-  const date = $('#tx-date').value || todayStr();
-  const note = $('#tx-note').value.trim();
+function loadChat() {
   try {
-    if (state.kind === 'transfer') {
-      await api('/api/transfers', {
-        method: 'POST',
-        body: {
-          from_account_id: $('#tx-from').value,
-          to_account_id: $('#tx-to').value,
-          amount,
-          date,
-          note,
-        },
-      });
-      toast('转账已记录');
+    const raw = JSON.parse(localStorage.getItem(CHAT_KEY) || '[]');
+    return Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveChat() {
+  try {
+    localStorage.setItem(CHAT_KEY, JSON.stringify(chatLog.slice(-120)));
+  } catch {
+    /* 隐私模式下写不进去也不影响本次使用 */
+  }
+}
+
+const inlineMd = (s) =>
+  esc(s)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
+
+/** 模型偶尔会用 **加粗** 和列表，做个最小渲染，其余一律转义。 */
+function markdownLite(text) {
+  const lines = String(text ?? '').split('\n');
+  let html = '';
+  let inList = false;
+  for (const line of lines) {
+    const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+    if (bullet) {
+      if (!inList) {
+        html += '<ul>';
+        inList = true;
+      }
+      html += `<li>${inlineMd(bullet[1])}</li>`;
     } else {
-      const payload = {
-        account_id: $('#tx-account').value,
-        amount: state.kind === 'income' ? Math.abs(amount) : -Math.abs(amount),
-        category: state.pickedCategory || (state.kind === 'income' ? '其他收入' : '其他支出'),
-        note,
-        date,
-      };
-      await api('/api/transactions', { method: 'POST', body: payload });
-      toast(`已记账 ${money(payload.amount, { sign: true })}`);
+      if (inList) {
+        html += '</ul>';
+        inList = false;
+      }
+      if (line.trim()) html += `${inlineMd(line)}<br>`;
     }
-    closeSheet();
-    await refreshAll();
-    await reloadMonth();
+  }
+  if (inList) html += '</ul>';
+  return html.replace(/<br>$/, '');
+}
+
+const typingHtml = () =>
+  '<div class="msg ai"><div class="bubble typing"><i></i><i></i><i></i></div></div>';
+
+function chatMessageHtml(m) {
+  if (m.role === 'user') {
+    return `<div class="msg me"><div class="bubble">${esc(m.content)}</div></div>`;
+  }
+  const receipts = (m.actions || [])
+    .map(
+      (a) =>
+        `<div class="receipt ${a.ok === false ? 'bad' : ''}"><span class="rc-icon">${a.ok === false ? '⚠️' : '✅'}</span><span>${esc(a.summary)}</span></div>`,
+    )
+    .join('');
+  const cta =
+    m.cta === 'settings'
+      ? '<button class="btn ghost block" data-goto="settings" style="margin-top:8px">去设置 AI 接口</button>'
+      : '';
+  return `<div class="msg ai"><div class="bubble">${markdownLite(m.content)}${cta}</div>${receipts}</div>`;
+}
+
+function renderChat() {
+  const box = $('#chat-log');
+  if (!box) return;
+  if (!chatLog.length && !chatBusy) {
+    box.innerHTML = `<div class="chat-empty">
+      <span class="big">💬</span>
+      跟我说一句就行，比如「午饭 38」，我来记好分类和账户。
+      <div class="suggest">${CHAT_SUGGESTIONS.map(
+        (t) => `<button class="chip" data-suggest="${esc(t)}">${esc(t)}</button>`,
+      ).join('')}</div>
+    </div>`;
+    return;
+  }
+  box.innerHTML = chatLog.map(chatMessageHtml).join('') + (chatBusy ? typingHtml() : '');
+  box.lastElementChild?.scrollIntoView({ block: 'end' });
+}
+
+async function loadAiConfig() {
+  state.ai = await api('/api/ai/config');
+  return state.ai;
+}
+
+function fillAiForm(cfg) {
+  if (!cfg) return;
+  $('#ai-base').value = cfg.base_url || '';
+  $('#ai-model').value = cfg.model || '';
+  $('#ai-key').value = '';
+  $('#ai-key-state').textContent = cfg.has_key
+    ? '已保存 Key（留空表示不修改）'
+    : '尚未填写 Key';
+  const hint = $('#ai-hint');
+  hint.textContent = cfg.ready
+    ? '已就绪，去「对话」记账吧。'
+    : 'Key 只保存在这台设备上，不会出现在对话里。';
+  hint.className = cfg.ready ? 'muted small pos' : 'muted small';
+}
+
+async function saveAiConfig() {
+  const body = {
+    base_url: $('#ai-base').value.trim(),
+    model: $('#ai-model').value.trim(),
+  };
+  const key = $('#ai-key').value.trim();
+  if (key) body.api_key = key;
+  const cfg = await api('/api/ai/config', { method: 'POST', body });
+  state.ai = cfg;
+  fillAiForm(cfg);
+  return cfg;
+}
+
+/** 一次对话：模型说要调工具就执行，再把结果喂回去，直到它给出最终回复。 */
+async function runChatTurn() {
+  const today = todayStr();
+  const messages = [
+    {
+      role: 'system',
+      content: buildSystemPrompt({ accounts: state.accounts, categories: state.categories, today }),
+    },
+    ...chatLog
+      .slice(-MAX_CONTEXT)
+      .map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content })),
+  ];
+  const actions = [];
+  let mutated = false;
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+    const data = await api('/api/ai/chat', { method: 'POST', body: { messages, tools: AI_TOOLS } });
+    const msg = data?.choices?.[0]?.message;
+    if (!msg) throw new Error('AI 接口返回格式不对（缺少 choices[0].message）');
+    const calls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
+
+    if (!calls.length) {
+      return { role: 'assistant', content: msg.content || '（没有回复）', actions, mutated };
+    }
+
+    messages.push({ role: 'assistant', content: msg.content || '', tool_calls: calls });
+    for (const call of calls) {
+      let args = {};
+      try {
+        args = JSON.parse(call.function?.arguments || '{}');
+      } catch {
+        args = {};
+      }
+      const result = await runTool(call.function?.name, args, api, { today });
+      actions.push({ ok: result.ok !== false, summary: result.summary || call.function?.name });
+      if (result.mutated) mutated = true;
+      messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
+      if (result.mutated) await refreshAll();
+    }
+  }
+
+  return {
+    role: 'assistant',
+    content: '这一步有点绕，我先停一下。可以分几次跟我说，我会一笔一笔记。',
+    actions,
+    mutated,
+  };
+}
+
+async function sendChat(text) {
+  const content = String(text || '').trim();
+  if (!content || chatBusy) return;
+  chatLog.push({ role: 'user', content });
+  chatBusy = true;
+  saveChat();
+  renderChat();
+  const input = $('#chat-input');
+  input.value = '';
+  autoGrow(input);
+
+  try {
+    const cfg = state.ai && state.ai.ready ? state.ai : await loadAiConfig();
+    if (!cfg.ready) {
+      chatLog.push({
+        role: 'assistant',
+        content: '还没配置 AI 接口。去「设置 → AI 接口」填上地址、模型和 Key，我就能帮你记账了。',
+        cta: 'settings',
+      });
+      return;
+    }
+    const reply = await runChatTurn();
+    chatLog.push(reply);
+    if (reply.mutated) {
+      await refreshAll();
+      await reloadMonth();
+    }
+  } catch (err) {
+    chatLog.push({ role: 'assistant', content: `出错了：${err.message}` });
+  } finally {
+    chatBusy = false;
+    saveChat();
+    renderChat();
+    render();
+  }
+}
+
+function autoGrow(el) {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = `${Math.min(el.scrollHeight || 44, 120)}px`;
+}
+
+$('#chat-input').addEventListener('input', (e) => autoGrow(e.target));
+$('#chat-input').addEventListener('keydown', (e) => {
+  // 输入法组合中的回车是选词，不是发送。
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    sendChat(e.target.value);
+  }
+});
+$('#btn-chat-send').onclick = () => sendChat($('#chat-input').value);
+$('#chat-log').addEventListener('click', (e) => {
+  const s = e.target.closest('[data-suggest]');
+  if (s) sendChat(s.dataset.suggest);
+});
+$('#btn-chat-clear').onclick = () => {
+  if (!chatLog.length) return toast('还没有对话');
+  if (!confirm('清空对话记录？账本数据不受影响。')) return;
+  chatLog = [];
+  saveChat();
+  renderChat();
+};
+
+// --------------------------------------------------------------- AI 接口配置
+
+$('#ai-presets').innerHTML = AI_PRESETS.map(
+  (p) => `<button class="chip" data-preset="${esc(p.label)}">${esc(p.label)}</button>`,
+).join('');
+
+$('#ai-presets').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-preset]');
+  if (!btn) return;
+  const preset = AI_PRESETS.find((p) => p.label === btn.dataset.preset);
+  if (!preset) return;
+  $('#ai-base').value = preset.base_url;
+  $('#ai-model').value = preset.model;
+  $('#ai-key').focus();
+});
+
+$('#btn-ai-save').onclick = async () => {
+  try {
+    await saveAiConfig();
+    toast('AI 接口已保存');
   } catch (e) {
     toast(e.message);
+  }
+};
+
+// 测试连接会先保存当前填写的配置，再发一句最短的请求。
+$('#btn-ai-test').onclick = async () => {
+  const btn = $('#btn-ai-test');
+  btn.disabled = true;
+  btn.textContent = '测试中…';
+  try {
+    await saveAiConfig();
+    const data = await api('/api/ai/chat', {
+      method: 'POST',
+      body: { messages: [{ role: 'user', content: '只回复两个字：正常' }] },
+    });
+    const reply = data?.choices?.[0]?.message?.content || '正常';
+    toast(`连接正常：${String(reply).slice(0, 24)}`, 4000);
+  } catch (e) {
+    toast(`连接失败：${e.message}`, 6000);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '测试连接';
   }
 };
 
@@ -701,79 +892,6 @@ function closeModal() {
 $('#btn-modal-cancel').onclick = closeModal;
 $('#modal').addEventListener('click', (e) => {
   if (e.target.id === 'modal') closeModal();
-});
-
-const typeOptions = (sel) =>
-  Object.entries(ACCOUNT_TYPES)
-    .map(([k, v]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${v.icon} ${v.label}</option>`)
-    .join('');
-
-// ------------------------------------------------------------------- 账户管理
-
-$('#btn-add-account').onclick = () =>
-  openModal(
-    '新增账户',
-    `<label class="field"><span>名称</span><input id="a-name" placeholder="例如：招商银行储蓄卡"></label>
-     <label class="field"><span>类型</span><select id="a-type">${typeOptions('bank')}</select></label>
-     <label class="field"><span>当前余额</span><input id="a-balance" type="text" inputmode="decimal" placeholder="0.00"></label>
-     <p class="muted small">信用卡 / 欠款请填负数，例如 -1200。</p>`,
-    async () => {
-      const name = $('#a-name').value.trim();
-      if (!name) throw new Error('请输入账户名称');
-      await api('/api/accounts', {
-        method: 'POST',
-        body: {
-          name,
-          type: $('#a-type').value,
-          initial_balance: Number($('#a-balance').value.replace(/[^\d.-]/g, '')) || 0,
-        },
-      });
-      await refreshAll();
-      render();
-      toast('账户已添加');
-    },
-  );
-
-document.addEventListener('click', (e) => {
-  const row = e.target.closest('[data-edit-account]');
-  if (!row) return;
-  const a = accountById(row.dataset.editAccount);
-  if (!a) return;
-  openModal(
-    '编辑账户',
-    `<label class="field"><span>名称</span><input id="a-name" value="${esc(a.name)}"></label>
-     <label class="field"><span>类型</span><select id="a-type">${typeOptions(a.type)}</select></label>
-     <label class="field"><span>当前余额（直接改这里可校准）</span><input id="a-balance" type="text" inputmode="decimal" value="${a.balance}"></label>
-     <button class="btn ghost block" id="a-archive">${a.archived ? '恢复显示' : '隐藏该账户'}</button>
-     <button class="btn danger-ghost block" id="a-delete">删除账户及其记录</button>`,
-    async () => {
-      await api(`/api/accounts/${a.id}`, {
-        method: 'PATCH',
-        body: {
-          name: $('#a-name').value.trim() || a.name,
-          type: $('#a-type').value,
-          balance: Number($('#a-balance').value.replace(/[^\d.-]/g, '')) || 0,
-        },
-      });
-      await refreshAll();
-      await reloadMonth();
-      toast('已保存');
-    },
-  );
-  $('#a-archive').onclick = async () => {
-    await api(`/api/accounts/${a.id}`, { method: 'PATCH', body: { archived: !a.archived } });
-    closeModal();
-    await refreshAll();
-    render();
-  };
-  $('#a-delete').onclick = async () => {
-    if (!confirm(`删除「${a.name}」以及它的全部交易记录？此操作不可恢复。`)) return;
-    await api(`/api/accounts/${a.id}`, { method: 'DELETE' });
-    closeModal();
-    await refreshAll();
-    await reloadMonth();
-    toast('账户已删除');
-  };
 });
 
 // ------------------------------------------------------------------- 分类管理
